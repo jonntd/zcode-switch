@@ -283,15 +283,16 @@ async function guard(fn) {
 async function loadAcctQuota(id, force = false) {
   const cur = acctQuota[id] || {};
   if (cur.busy) return;
-  acctQuota[id] = { busy: true };
-  if (!uiLocked()) render();
+  // 保留旧读数仅置 busy：刷新期间芯片不闪空；失败也保留旧数据、只标错误
+  acctQuota[id] = { data: cur.data ?? null, err: cur.err ?? null, busy: true };
+  if (!uiLocked()) scheduleRender();
   try {
     const data = await invokeWithTimeout("get_account_quota", { id, force });
     acctQuota[id] = { data, err: null, busy: false };
   } catch (e) {
-    acctQuota[id] = { data: null, err: stripErr(e), busy: false };
+    acctQuota[id] = { data: cur.data ?? null, err: stripErr(e), busy: false };
   }
-  if (!uiLocked()) render();
+  if (!uiLocked()) scheduleRender();
 }
 
 async function loadClaimPreview(id) {
@@ -1714,7 +1715,8 @@ function acctQuotaSlot(id) {
   let inner = "";
   if (q?.busy && !q?.data) {
     inner = `<span class="aq-loading">${t("q.loading")}</span>`;
-  } else if (q?.err) {
+  } else if (q?.err && !q?.data) {
+    // 有旧数据时错误只会在下次成功刷新后覆盖，避免错误条顶掉还能用的芯片
     const msg = q.err.length > 46 ? q.err.slice(0, 46) + "…" : q.err;
     inner = `<span class="aq-err">${esc(msg)}</span>`;
   } else if (q?.data) {
@@ -2225,7 +2227,15 @@ listen("light-sleep", () => {
 function lightWakeRefresh() {
   if (!lightSleeping) return;
   lightSleeping = false;
-  refresh().then(() => { if (!uiLocked()) scheduleRender(); }).catch(() => {});
+  refresh().then(async () => {
+    if (!uiLocked()) scheduleRender();
+    // 额度缓存已被 light-sleep 清空且轻量模式不轮询：恢复后按需逐号重拉，
+    // 串行 + 小间隔，避免并发请求特征（这属于「按需刷新」，与后台轮询不同）
+    for (const a of state?.accounts || []) {
+      loadAcctQuota(a.id);
+      await sleep(300);
+    }
+  }).catch(() => {});
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) lightWakeRefresh(); });
 window.addEventListener("focus", lightWakeRefresh);

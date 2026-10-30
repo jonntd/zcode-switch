@@ -2,8 +2,10 @@
 
 ## Git 规则（用户明确要求）
 
-- **不要推送 git**：所有提交只保留在本地，未经用户明确要求不得执行 `git push`（无论 origin 指向哪个仓库）。
-- 远程仓库：origin = https://github.com/wjsqqj/zcode-switch.git（fetch/pull/merge 可以，push 禁止）。
+- **默认不推送 git**：所有提交只保留在本地，除非用户在对话中明确要求推送。
+- 远程仓库：
+  - origin = https://github.com/wjsqqj/zcode-switch.git（仅同步来源，fetch/pull/merge 可以，**永不 push**）。
+  - jonntd = https://github.com/jonntd/zcode-switch.git（用户指定的推送目标，2026-10-31 已推送并设为 main 上游）。
 
 ## 项目背景速记
 
