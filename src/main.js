@@ -1458,9 +1458,9 @@ function winRowHtml(it, cls = "") {
 function fmtTokens(n) {
   if (n == null) return "";
   if (lang() === "zh") {
+    // 中文单位习惯：亿（1e8）、万（1e4）——不要用英文 K/M（如 "4.9M" 应为 "490万"）
     if (n >= 1e8) return (n / 1e8).toFixed(n % 1e8 === 0 ? 0 : 1) + "亿";
-    if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 1) + "M";
-    if (n >= 1e3) return Math.round(n / 1e3) + "K";
+    if (n >= 1e4) return (n / 1e4).toFixed(n % 1e4 === 0 ? 0 : 1) + "万";
     return String(Math.round(n));
   }
   if (n >= 1e9) return (n / 1e9).toFixed(n % 1e9 === 0 ? 0 : 1) + "B";

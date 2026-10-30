@@ -779,6 +779,8 @@ fn query_channels_via(channels: &[Channel], fetch: &FetchFn) -> Result<QuotaOver
 
 fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
     let mut slots: Vec<PlanSlot> = vec![];
+    // 每条 slot 对应数据源的刷新时间：去重时保留更新的一条
+    let mut slot_ts: Vec<i64> = vec![];
     let mut sources: Vec<&str> = vec![];
     let mut refreshed = 0i64;
     for p in &parts {
@@ -789,7 +791,9 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
         for s in &p.plans {
             // 去重：同名套餐（同 tier + 同名称 + 同有效期）视为同一份，
             // 不论是否来自同一数据源——同源重复下发（如活动重复推送）也曾漏过。
-            // 重复且用量读数不一致时，保留更高的 percent_used（对余量判断更保守）。
+            // 读数不一致时保留「数据源刷新时间更新」的一条：
+            // 旧的「取更高 percent_used」会把陈旧缓存里的高读数当真，
+            // 表现为明明没怎么用却显示接近耗尽（额度数字不对）。
             let dup = slots.iter().position(|t| {
                 t.tier == s.tier
                     && t.name == s.name
@@ -799,11 +803,15 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
             });
             match dup {
                 Some(i) => {
-                    if (s.percent_used.unwrap_or(0.0)) > (slots[i].percent_used.unwrap_or(0.0)) {
+                    if p.refreshed_at >= slot_ts[i] {
                         slots[i] = s.clone();
+                        slot_ts[i] = p.refreshed_at;
                     }
                 }
-                None => slots.push(s.clone()),
+                None => {
+                    slots.push(s.clone());
+                    slot_ts.push(p.refreshed_at);
+                }
             }
         }
     }
