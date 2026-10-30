@@ -24,6 +24,8 @@ let refreshTicker = null;
 // 多实例 Profile：列表 + 内联新建表单状态
 let profiles = [];
 let profileFormOpen = false;
+// 账号行「…」溢出菜单：当前展开的账号 id
+let rowMenuFor = null;
 
 // 活动中心：已探测到的活动（accountId -> ClaimPlan[]，含 campaign 元数据）
 let activities = {};
@@ -1738,32 +1740,32 @@ function renderInner() {
         meta += `<span class="${exp.warn ? "warn-line" : ""}">${esc(t("q.validUntil", { date: exp.text }))}</span>`;
     }
     if (ident) meta += `${meta ? " · " : ""}${esc(ident)}`;
-    const rowCd = cooldownLeft(acctRefreshCooldown[a.id]);
-    const rowOff = acctRefreshBusy[a.id] || claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning || rowCd > 0;
-    const rowTitle = rowCd > 0 && !acctRefreshBusy[a.id]
-      ? t("m.refreshCooldownSec", { n: rowCd })
-      : t("btn.acctRefreshTitle");
+    const initial = (a.name.trim()[0] || "?").toUpperCase();
     return `
-    <div class="row${isActive ? " active" : ""}" data-id="${a.id}">
+    <div class="row acc-row${isActive ? " active" : ""}" data-id="${a.id}">
       <div class="row-top">
-        <span class="notch" style="background:${notchColor(a.id)}"></span>
+        <div class="acc-avatar" style="background:${notchColor(a.id)}1f;color:${notchColor(a.id)};border-color:${notchColor(a.id)}55">${esc(initial)}</div>
         <div class="row-main">
-          <div class="row-name">${esc(a.name)}${tierBadgeFor(a.id)}${isActive ? `<span class="tag-use">${t("btn.inUse")}</span>` : ""}${a.has_user_info === false ? `<span class="tag-relogin" title="${esc(t("btn.reloginTitle"))}">${t("btn.relogin")}</span>` : ""}${a.jwt_expired ? `<span class="tag-relogin" title="${esc(t("btn.jwtExpiredTitle"))}">${t("btn.jwtExpired")}</span>` : ""}</div>
+          <div class="row-name">${esc(a.name)}${tierBadgeFor(a.id)}${a.has_user_info === false ? `<span class="tag-relogin" title="${esc(t("btn.reloginTitle"))}">${t("btn.relogin")}</span>` : ""}${a.jwt_expired ? `<span class="tag-relogin" title="${esc(t("btn.jwtExpiredTitle"))}">${t("btn.jwtExpired")}</span>` : ""}</div>
           <div class="row-meta">${meta}</div>
         </div>
         <div class="row-actions">
-          <button class="icon-btn${rowOff ? " is-off" : ""}" title="${esc(rowTitle)}" aria-label="${esc(rowTitle)}"
-            click="actions.acctRefreshClaim('${a.id}')">${ic("refresh", 16)}${rowCd > 0 && !acctRefreshBusy[a.id] ? `<span class="ic-badge" data-cd-id="${a.id}">${rowCd}</span>` : ""}</button>
-          <button class="icon-btn" title="${t("btn.quota")}" aria-label="${t("btn.quota")}" click="actions.acctQuota('${a.id}')">${ic("gauge", 16)}</button>
+          ${isActive
+            ? `<span class="in-use-pill">${ic("check", 12)} ${t("btn.inUse")}</span>`
+            : `<button class="btn-switch has-ic" click="actions.askSwitch('${a.id}')">${ic("swap", 14)} ${t("btn.switch")}</button>`}
           <button class="icon-btn" title="${t("pf.rowLaunchTitle")}" aria-label="${t("pf.rowLaunchTitle")}" click="actions.launchForAccount('${a.id}')">${ic("play", 16)}</button>
-          <button class="icon-btn" title="${t("btn.rename")}" aria-label="${t("btn.rename")}" click="actions.rename('${a.id}')">${ic("pen", 16)}</button>
-          <button class="icon-btn" title="${t("btn.export")}" aria-label="${t("btn.export")}" click="actions.exportOne('${a.id}')">${ic("export", 16)}</button>
-          <button class="icon-btn danger" title="${t("btn.delete")}" aria-label="${t("btn.delete")}" click="actions.delete('${a.id}')">${ic("x", 16)}</button>
-          <button class="btn-switch has-ic" click="actions.askSwitch('${a.id}')" ${isActive ? "disabled" : ""}>
-            ${isActive ? t("btn.current") : ic("swap", 14) + " " + t("btn.switch")}
-          </button>
+          <button class="icon-btn${rowMenuFor === a.id ? " open" : ""}" title="${t("pf.more")}" aria-label="${t("pf.more")}" click="actions.toggleRowMenu('${a.id}')">${ic("more", 16)}</button>
         </div>
       </div>
+      ${rowMenuFor === a.id ? `
+      <div class="menu-backdrop" click="actions.closeRowMenu()"></div>
+      <div class="row-menu">
+        <button click="actions.menuAct('refresh','${a.id}')">${ic("refresh", 15)} ${t("btn.refreshClaim")}</button>
+        <button click="actions.menuAct('quota','${a.id}')">${ic("gauge", 15)} ${t("btn.quota")}</button>
+        <button click="actions.menuAct('rename','${a.id}')">${ic("pen", 15)} ${t("btn.rename")}</button>
+        <button click="actions.menuAct('export','${a.id}')">${ic("export", 15)} ${t("btn.export")}</button>
+        <button class="danger" click="actions.menuAct('delete','${a.id}')">${ic("x", 15)} ${t("btn.delete")}</button>
+      </div>` : ""}
       ${acctQuotaSlot(a.id)}
     </div>`;
   }).join("");
@@ -1835,12 +1837,15 @@ function renderProfilesHtml() {
   const runningCount = profiles.filter((p) => p.running).length;
   const rows = profiles.map((p) => {
     const running = !!p.running;
+    const initial = (p.name.trim()[0] || "?").toUpperCase();
     const meta = [p.dataRoot, p.port ? `${t("pf.port")}: ${p.port}` : "", p.accountName || ""]
       .filter(Boolean).map((x) => esc(x)).join(" · ");
     return `
-    <div class="row pf-row${running ? " active" : ""}" data-id="${esc(p.id)}">
+    <div class="row acc-row${running ? " active" : ""}" data-id="${esc(p.id)}">
       <div class="row-top">
-        <span class="status-dot ${running ? "run" : "off"}" title="${running ? t("pf.running") : t("pf.stopped")}"></span>
+        <div class="acc-avatar${running ? " on" : ""}" style="${running
+          ? "background:rgba(111,191,115,.12);color:#6fbf73;border-color:rgba(111,191,115,.4)"
+          : ""}">${esc(initial)}</div>
         <div class="row-main">
           <div class="row-name">${esc(p.name)}${running ? `<span class="tag-use">${t("pf.running")}</span>` : ""}${p.pid ? `<span class="row-meta">PID ${p.pid}</span>` : ""}</div>
           <div class="row-meta">${meta}</div>
@@ -1897,6 +1902,23 @@ async function reloadProfiles() {
 }
 
 Object.assign(actions, {
+  toggleRowMenu(id) {
+    rowMenuFor = rowMenuFor === id ? null : id;
+    render();
+  },
+  closeRowMenu() {
+    rowMenuFor = null;
+    render();
+  },
+  menuAct(kind, id) {
+    rowMenuFor = null;
+    render();
+    if (kind === "refresh") actions.acctRefreshClaim(id);
+    else if (kind === "quota") actions.acctQuota(id);
+    else if (kind === "rename") actions.rename(id);
+    else if (kind === "export") actions.exportOne(id);
+    else if (kind === "delete") actions.delete(id);
+  },
   async launchForAccount(accountId) {
     await guard(async () => {
       const p = await invoke("profile_launch_for_account", { accountId });

@@ -274,5 +274,6 @@ export const en = {
   "pf.deleteTitle": "Delete instance \"{name}\"?",
   "pf.deleteBody": "Removes the instance profile only (files under {root} are kept). Stop the instance first.",
   "pf.rowLaunchTitle": "Launch this account in its own instance",
+  "pf.more": "More actions",
   "pf.alreadyRunning": "Instance \"{name}\" is already running",
 };

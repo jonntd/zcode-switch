@@ -38,6 +38,8 @@ const ICONS = {
   alert: P("M8 2.2 14.8 13.8H1.2z") + P("M8 6.4v3.2") + P("M8 11.6v.2"),
 
   empty: P("M3 3h10") + P("M3 13h10") + `<path d="M8 6.2v3.6M6.2 8h3.6" stroke-dasharray="2 1.6"/>`,
+
+  more: `<circle cx="3.4" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r="1.4" fill="currentColor" stroke="none"/>`,
 };
 
 export function ic(name, size = 16, cls = "") {
