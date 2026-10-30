@@ -1251,3 +1251,31 @@ input:focus-visible,
   color: var(--text-dim, #8a8a8a);
   text-align: center;
 }
+
+/* ===== 密度压实：紧凑行式列表 ===== */
+.acc-row { padding: 7px 10px 7px 12px; margin-bottom: 6px; }
+.acc-avatar { width: 26px; height: 26px; font-size: 12.5px; }
+.acc-row .row-name { font-size: 13.5px; font-weight: 500; gap: 5px; }
+.acc-row .row-name .tier { font-size: 10px; padding: 0 5px; }
+.acc-row .row-name .tag-relogin,
+.acc-row .row-name .tag-use { font-size: 9.5px; padding: 0 4px; }
+.acc-row .row-meta { font-size: 11px; margin-top: 2px; }
+.acc-row .row-actions { gap: 5px; }
+.acc-row .icon-btn { width: 26px; height: 26px; }
+.acc-row .icon-btn .ic { width: 13px; height: 13px; }
+.acc-row .btn-switch { height: 26px; padding: 0 10px; font-size: 12px; }
+.acc-row .btn-ghost.has-ic { font-size: 12px; padding: 3px 9px; }
+.acc-row .in-use-pill { padding: 2px 9px; font-size: 11.5px; gap: 4px; }
+.pf-head { margin-top: 12px; }
+
+.acc-row .row-quota-slot { min-height: 0; margin-top: 5px; padding-top: 5px; gap: 3px; }
+.acc-row .q-win { grid-template-columns: 50px 1fr 116px; gap: 6px; margin-bottom: 3px; }
+.acc-row .q-win-label { font-size: 12px; }
+.acc-row .q-win-pct { font-size: 11px; }
+.acc-row .q-win-reset { font-size: 10.5px; }
+.acc-row .qbar { height: 12px; }
+.acc-row .qbar-pct { font-size: 10px; }
+.acc-row .q-line { font-size: 12px; margin-top: 2px; }
+.acc-row .q-expand { font-size: 12px; margin-top: 4px; }
+.acc-row .claim-strip { font-size: 11.5px; padding: 4px 8px; }
+.acc-row .q-bonus-hint { font-size: 11px; }
