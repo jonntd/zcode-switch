@@ -497,6 +497,8 @@ pub fn run(args: &[String]) -> (String, i32) {
                                 if running {
                                     Ok((p, 0, true))
                                 } else {
+                                    let pp = crate::profile::paths_for_profile(&paths, &p);
+                                    crate::store::seed_profile_account(&paths, &pp, &acc)?;
                                     crate::profile::launch_profile(&paths, &p).map(|pid| (p, pid, false))
                                 }
                             }) {

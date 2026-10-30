@@ -1262,6 +1262,36 @@ pub fn account_quota(paths: &Paths, id: &str) -> Result<quota::QuotaOverview, St
     quota::quota_for_snapshot(&paths.home, &acc.credentials, acc.config.as_ref())
 }
 
+/// 把账号快照播种进一个 Profile 实例的数据根（credentials/config/deviceMid/arms uid），
+/// 使独立启动的 ZCode 直接处于该账号的登录态。幂等：live 已是同账号则跳过。
+/// main_paths 用于读取主实例的中继密钥等跨实例上下文；profile_paths 指向实例数据根。
+pub fn seed_profile_account(
+    main_paths: &Paths,
+    profile_paths: &Paths,
+    account_id: &str,
+) -> Result<(), String> {
+    let acc = load_account(main_paths, account_id)?;
+    if let Ok(Some(live)) = read_live(profile_paths) {
+        if is_logged_in(&live) && canonical_hash(&live) == acc.hash {
+            return Ok(());
+        }
+    }
+    let creds = inject_relay_pass_hash(&acc.credentials, current_relay_pass(main_paths).as_ref());
+    write_live(profile_paths, &creds)?;
+    if let Some(cfg) = &acc.config {
+        if !new_gen_provider_config(&profile_paths.data_root) {
+            write_live_config(profile_paths, cfg)?;
+        }
+    }
+    reset_live_plan_cache(profile_paths);
+    align_family_domain(profile_paths, &acc);
+    let mid = ensure_virtual_device_mid_locked(main_paths, account_id)?;
+    write_live_device_mid(profile_paths, &mid)?;
+    let uid = ensure_virtual_arms_uid_locked(main_paths, account_id)?;
+    let _ = write_live_arms_uid(profile_paths, &uid);
+    Ok(())
+}
+
 fn ensure_virtual_device_mid_locked(paths: &Paths, id: &str) -> Result<String, String> {
     {
         let acc = load_account(paths, id)?;

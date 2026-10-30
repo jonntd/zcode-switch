@@ -1758,13 +1758,15 @@ async fn profile_kill(id: String) -> Result<serde_json::Value, String> {
     Ok(profile::profile_value(&paths, &p))
 }
 
-/// 账号行一键启动：定位（或自动创建）绑定该账号的 Profile 并启动独立实例。
+/// 账号行一键启动：定位（或自动创建）绑定该账号的 Profile，播种登录态后启动独立实例。
 #[tauri::command]
 async fn profile_launch_for_account(account_id: String) -> Result<serde_json::Value, String> {
     let paths = Paths::detect();
     let p = profile::ensure_profile_for_account(&paths, &account_id)?;
     let already_running = profile::profile_running(&paths, &p);
     if !already_running {
+        let profile_paths = profile::paths_for_profile(&paths, &p);
+        store::seed_profile_account(&paths, &profile_paths, &account_id)?;
         profile::launch_profile(&paths, &p)?;
     }
     let mut v = profile::profile_value(&paths, &p);

@@ -249,19 +249,22 @@ pub fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(not(windows))]
     {
-        // kill(pid, 0) 仅探测存活
         let pid_i = pid as i32;
-        libc_kill_probe(pid_i)
+        unsafe {
+            extern "C" {
+                fn kill(pid: i32, sig: i32) -> i32;
+                fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
+            }
+            // 先 waitpid(WNOHANG)：若是本进程 spawn 的子进程且已退出，顺便回收僵尸——
+            // 否则僵尸会让 kill(pid,0) 永远应答"活着"，实例状态卡在"运行中"无法停止。
+            let mut st: i32 = 0;
+            match waitpid(pid_i, &mut st, 1 /* WNOHANG */) {
+                0 => true,        // 仍在运行
+                r if r > 0 => false, // 已退出并回收
+                _ => kill(pid_i, 0) == 0, // 非本进程子进程：退化为传统探测
+            }
+        }
     }
-}
-
-#[cfg(not(windows))]
-fn libc_kill_probe(pid: i32) -> bool {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    // sig=0: 不发信号，仅检查进程是否存在
-    unsafe { kill(pid, 0) == 0 }
 }
 
 pub fn profile_running(paths: &Paths, p: &Profile) -> bool {
