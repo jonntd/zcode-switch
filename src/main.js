@@ -1434,7 +1434,8 @@ function tierBadgeFor(id) {
   const q = acctQuota[id];
   if (!q?.data) return "";
   const plans = q.data.plans || [];
-  const pairs = plans.map((p) => [p.tier, p.tier_code]);
+  // 同 tier 去重：后端合并已修复，这里兜底防同档徽章重复渲染
+  const pairs = [...new Map(plans.map((p) => [`${p.tier}|${p.tier_code}`, [p.tier, p.tier_code]])).values()];
   const list = (pairs.length ? pairs : q.data.plan_tier ? [[q.data.plan_tier, null]] : []).slice(0, 2);
   if (!list.length) return `<span class="tier-b free">Free</span>`;
   return list.map(([tier, code]) => tierChipHtml(tier, code)).join("");

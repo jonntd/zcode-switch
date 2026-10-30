@@ -779,7 +779,6 @@ fn query_channels_via(channels: &[Channel], fetch: &FetchFn) -> Result<QuotaOver
 
 fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
     let mut slots: Vec<PlanSlot> = vec![];
-    let mut slot_src: Vec<String> = vec![];
     let mut sources: Vec<&str> = vec![];
     let mut refreshed = 0i64;
     for p in &parts {
@@ -788,16 +787,23 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
         }
         refreshed = refreshed.max(p.refreshed_at);
         for s in &p.plans {
-            let dup = slot_src.iter().enumerate().any(|(i, src)| {
-                src != &p.source
-                    && slots[i].tier == s.tier
-                    && slots[i].name == s.name
-                    && !slots[i].items.is_empty()
+            // 去重：同名套餐（同 tier + 同名称 + 同有效期）视为同一份，
+            // 不论是否来自同一数据源——同源重复下发（如活动重复推送）也曾漏过。
+            // 重复且用量读数不一致时，保留更高的 percent_used（对余量判断更保守）。
+            let dup = slots.iter().position(|t| {
+                t.tier == s.tier
+                    && t.name == s.name
+                    && t.expire == s.expire
+                    && !t.items.is_empty()
                     && !s.items.is_empty()
             });
-            if !dup {
-                slots.push(s.clone());
-                slot_src.push(p.source.clone());
+            match dup {
+                Some(i) => {
+                    if (s.percent_used.unwrap_or(0.0)) > (slots[i].percent_used.unwrap_or(0.0)) {
+                        slots[i] = s.clone();
+                    }
+                }
+                None => slots.push(s.clone()),
             }
         }
     }
