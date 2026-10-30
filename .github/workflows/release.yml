@@ -57,6 +57,28 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Z·SWITCH ${{ github.ref_name }}'
           releaseBody: |
+            ## 本次更新（v1.7.3-Z.EMAIL）
+
+            ### 修复：z.ai 登录窗口里的登录方式切换（手机号 / 邮箱 / Google / GitHub）
+
+            - **同页表单切换**：登录页把邮箱表单和手机号表单放在同一个页面（手机号表单默认隐藏）。辅助按钮条不再把它们当成两个页面：点「手机号登录」就地切出手机号表单，点「邮箱登录」就地切回邮箱表单，不再产生多余的整页跳转
+            - **修掉「已在邮箱登录页」误报**：停在 GitHub 授权页时不再拿对方页面文案做判断（GitHub 登录页自带的 `Forgot password?` 正是旧判据的命中项）；当前显示的是手机号表单时点「邮箱登录」会正确切换，而不是提示你已经在该页
+            - 新增「已在手机号登录页」提示（中 / 英文）
+            - **修掉「从 GitHub 页点手机号登录，结果停在邮箱登录页」**：跳转意图改挂在 URL fragment 与 `window.name` 上携带（`sessionStorage` 按 origin 隔离，跨域写入的意图到 z.ai 后读不到），落地后自动补点直到目标表单真的可见，并把标记从地址栏抹掉以保证只切换一次
+            - **判定更耐用**：「当前显示哪个表单」改用可见输入框的 `type` / `placeholder` / `name` 特征判断；页内切换入口改为多重探测 + 逐级降级（文字 tab → 旧版 Z.ai 图标按钮 → 短文案容器），页面结构小改不至于失效
+            - **注入幂等**：同一页面被重复注入不再叠加多个轮询、不会把「授权」点两次；授权确认页改为常驻轮询，SPA 内部路由进到授权页也能自动点「授权」
+            - 登录辅助条按域名收敛：非 z.ai 域名（GitHub / Google）只做整页跳回，不碰对方 DOM
+
+            ## 关于本项目
+
+            本项目基于 [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch) 原开源的基础上增加的功能如下：
+
+            - 添加 z.ai 邮箱登录支持和界面增强
+            - 实现 zai 登录接力机制：先通过官网登录页建立会话，再跳转到授权端点获取令牌
+            - 在 OAuth 流程中添加邮箱辅助功能，注入 JavaScript 按钮条供用户切换邮箱登录/注册
+            - 添加页面导航监控和 URL 轮询机制，确保登录完成后正确接力到授权页面
+            - 邮箱与手机号表单在同一页面上，按钮条按「当前可见表单」做页内切换，跨第三方页时靠 URL fragment 携带切换意图
+
             见 [README](https://github.com/${{ github.repository }}/blob/main/README.md) 了解完整功能。
 
             ## 下载
@@ -73,7 +95,10 @@ jobs:
 
             SHA-256 校验和见各 `checksums-*.txt`。
           releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # 本 fork 的正式版本带 -Z.EMAIL 后缀，需要标成 Latest；只有 -beta 才是预发布
+          #（预发布会被 GitHub 排除在 Latest 之外，所以 Latest 必须 prerelease=false）
+          prerelease: ${{ contains(github.ref_name, '-beta') }}
+          makeLatest: 'true'
           args: --bundles ${{ matrix.bundles }} ${{ matrix.rust_target && format('--target {0}', matrix.rust_target) || '' }}
 
       - name: Upload portable exe + checksums (windows)

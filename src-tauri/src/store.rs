@@ -142,6 +142,12 @@ pub struct Settings {
     pub language: Option<String>,
     #[serde(default)]
     pub auto_claim: Option<bool>,
+    /// 活动探测（默认关）：开启后按抖动节奏只读探测 marketing/touch，发现新活动提醒。
+    #[serde(default)]
+    pub activity_probe: Option<bool>,
+    /// 到点自动领取（默认关，依赖 auto_claim）：活动开始后触发一次自动领取。
+    #[serde(default)]
+    pub claim_at_effective: Option<bool>,
 }
 
 impl Settings {
@@ -149,6 +155,8 @@ impl Settings {
     pub fn close_to_tray(&self) -> bool { self.close_to_tray.unwrap_or(true) }
     pub fn hot_switch(&self) -> bool { self.hot_switch.unwrap_or(false) }
     pub fn auto_claim(&self) -> bool { self.auto_claim.unwrap_or(false) }
+    pub fn activity_probe(&self) -> bool { self.activity_probe.unwrap_or(false) }
+    pub fn claim_at_effective(&self) -> bool { self.claim_at_effective.unwrap_or(false) }
     pub fn auth_proxy(&self) -> Option<&str> {
         if self.auth_proxy_on.unwrap_or(false) {
             self.auth_proxy_url.as_deref().map(str::trim).filter(|s| !s.is_empty())
@@ -187,6 +195,8 @@ pub struct AppState {
     pub close_to_tray: bool,
     pub hot_switch: bool,
     pub auto_claim: bool,
+    pub activity_probe: bool,
+    pub claim_at_effective: bool,
     pub auth_proxy_on: bool,
     pub auth_proxy_url: Option<String>,
     pub language: String,
@@ -262,11 +272,48 @@ pub fn atomic_write(path: &Path, data: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn claim_history_file(paths: &Paths) -> PathBuf {
+    paths.store_dir().join("claim-history.json")
+}
+
+/// 领取成功后追加一条历史（仅套餐元数据，不含凭证）。失败静默（best-effort）。
+pub(crate) fn record_claim_history(paths: &Paths, account_id: &str, plan_id: &str, plan_name: &str) {
+    let file = claim_history_file(paths);
+    let mut items: Vec<Value> = fs::read_to_string(&file)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    let now_ms = Local::now().timestamp_millis();
+    items.push(serde_json::json!({
+        "accountId": account_id,
+        "planId": plan_id,
+        "planName": plan_name,
+        "claimedAt": now_ms,
+    }));
+    // 只保留最近 200 条，防无限增长
+    if items.len() > 200 {
+        let drop = items.len() - 200;
+        items.drain(0..drop);
+    }
+    let _ = atomic_write(&file, &serde_json::to_string(&items).unwrap_or_default());
+}
+
+/// 读取某账号的领取历史（文件损坏/缺失视为空）。
+pub(crate) fn claim_history_for(paths: &Paths, account_id: &str) -> Vec<Value> {
+    let items: Vec<Value> = fs::read_to_string(claim_history_file(paths))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    items
+        .into_iter()
+        .filter(|it| it.get("accountId").and_then(|v| v.as_str()) == Some(account_id))
+        .collect()
+}
+
 pub fn read_live(paths: &Paths) -> Result<Option<Value>, String> {
     if !paths.live_file().exists() {
         return Ok(None);
-    }
-    let raw = fs::read_to_string(paths.live_file())
+    }    let raw = fs::read_to_string(paths.live_file())
         .map_err(|e| trf("err.read", &[("path", &paths.live_file().display().to_string()), ("e", &e.to_string())]))?;
     let v: Value = serde_json::from_str(&raw)
         .map_err(|e| trf("err.bad_json", &[("path", &paths.live_file().display().to_string()), ("e", &e.to_string())]))?;
@@ -307,19 +354,29 @@ pub(crate) fn in_sandbox() -> bool {
 }
 
 #[cfg(windows)]
+const ZCODE_IMAGE: &str = "ZCode.exe";
+
+/// 取所有 ZCode 进程 PID（Electron 主进程与渲染/GPU 子进程映像名相同）。
+#[cfg(windows)]
+fn zcode_pids() -> Vec<u32> {
+    let filter = format!("IMAGENAME eq {ZCODE_IMAGE}");
+    let out = no_window("tasklist")
+        .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
+        .output();
+    let Ok(o) = out else { return Vec::new() };
+    String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .filter_map(|l| l.split("\",\"").nth(1))
+        .filter_map(|s| s.trim_matches('"').parse::<u32>().ok())
+        .collect()
+}
+
+#[cfg(windows)]
 pub fn zcode_running() -> bool {
     if in_sandbox() {
         return false;
     }
-    let out = no_window("tasklist")
-        .args(["/FI", "IMAGENAME eq ZCode.exe", "/FO", "CSV", "/NH"])
-        .output();
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .any(|l| l.to_lowercase().starts_with("\"zcode.exe\"")),
-        Err(_) => false,
-    }
+    !zcode_pids().is_empty()
 }
 
 #[cfg(not(windows))]
@@ -336,6 +393,99 @@ pub fn zcode_running() -> bool {
     })
 }
 
+/// 非 Windows 的优雅退出等待上限：SIGTERM 后给 ZCode 走正常退出链路（销毁托盘图标）的时间。
+#[cfg(not(windows))]
+const GRACEFUL_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// 强杀后的硬等待上限：结束不了就只能回报失败。
+const FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(8);
+/// 进程存活轮询间隔。
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// 轮询等待 ZCode 退出，返回是否已退出。
+fn wait_zcode_exit(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !zcode_running() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(EXIT_POLL_INTERVAL.min(deadline - now));
+    }
+}
+
+/// Windows 托盘图标归属枚举的上下文。
+#[cfg(windows)]
+struct TrayCleanup {
+    pids: Vec<u32>,
+    removed: usize,
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn tray_cleanup_proc(hwnd: isize, lparam: isize) -> i32 {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    let ctx = &mut *(lparam as *mut TrayCleanup);
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if ctx.pids.contains(&pid) {
+        // 不看窗口类名（实测 ZCode/Electron 的窗口类是单字符，且托盘宿主类名无稳定契约），
+        // 直接按 uID 探测：GetRect 成功 = 该 (hwnd,uID) 注册过托盘图标。
+        ctx.removed += remove_tray_icons_of(hwnd);
+    }
+    1
+}
+
+/// 摘掉某个窗口名下已注册的通知区图标（`Shell_NotifyIconGetRect` 用来确认 uID 是否存在）。
+#[cfg(windows)]
+unsafe fn remove_tray_icons_of(hwnd: isize) -> usize {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::Shell::{
+        Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIM_DELETE, NOTIFYICONDATAW,
+        NOTIFYICONIDENTIFIER,
+    };
+
+    let mut removed = 0usize;
+    // Electron 的 uID 是内部常量（实测为 3），不同版本可能变化，故按区间探测而非写死。
+    for uid in 0u32..64 {
+        let mut ident: NOTIFYICONIDENTIFIER = std::mem::zeroed();
+        ident.cbSize = std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32;
+        ident.hWnd = hwnd;
+        ident.uID = uid;
+        let mut rect: RECT = std::mem::zeroed();
+        if Shell_NotifyIconGetRect(&ident, &mut rect) != 0 {
+            continue; // 该 uID 没有图标
+        }
+        let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = hwnd;
+        nid.uID = uid;
+        nid.uFlags = NIF_ICON;
+        if Shell_NotifyIconW(NIM_DELETE, &nid) != 0 {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// 强杀前先替 ZCode 摘掉它自己的托盘图标，返回摘掉的数量。
+#[cfg(windows)]
+fn remove_zcode_tray_icons() -> usize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+    let pids = zcode_pids();
+    if pids.is_empty() {
+        return 0;
+    }
+    let mut ctx = TrayCleanup { pids, removed: 0 };
+    unsafe {
+        EnumWindows(Some(tray_cleanup_proc), &mut ctx as *mut TrayCleanup as isize);
+    }
+    ctx.removed
+}
+
 #[cfg(windows)]
 pub fn kill_zcode() -> Result<bool, String> {
     if in_sandbox() {
@@ -344,17 +494,18 @@ pub fn kill_zcode() -> Result<bool, String> {
     if !zcode_running() {
         return Ok(true);
     }
-    let _ = no_window("taskkill")
-        .args(["/F", "/IM", "ZCode.exe"])
-        .output();
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < deadline {
-        if !zcode_running() {
-            return Ok(true);
-        }
-        std::thread::sleep(Duration::from_millis(400));
+    // ZCode 是 Electron 应用且「关闭 = 最小化到托盘」：实测既不响应 WM_CLOSE（taskkill 不带 /F
+    // 只投递信号，进程不退），也不响应 WM_QUERYENDSESSION / WM_ENDSESSION，因此没有可用的优雅
+    // 退出通道，只能强杀。强杀会让它来不及调 Shell_NotifyIcon(NIM_DELETE)，通知区留下「幽灵图标」
+    // （悬停才消失，每次切换 +1）。因此这里先按 hwnd + uID 替它调 NIM_DELETE 摘掉图标，再强杀。
+    let removed = remove_zcode_tray_icons();
+    if removed == 0 {
+        eprintln!("[zsw] 未找到 ZCode 托盘图标（可能本来就无图标或窗口类变更），本次强杀可能残留幽灵图标");
     }
-    Ok(!zcode_running())
+    let _ = no_window("taskkill")
+        .args(["/F", "/IM", ZCODE_IMAGE])
+        .output();
+    Ok(wait_zcode_exit(FORCED_EXIT_TIMEOUT))
 }
 
 #[cfg(not(windows))]
@@ -365,29 +516,22 @@ pub fn kill_zcode() -> Result<bool, String> {
     if !zcode_running() {
         return Ok(true);
     }
+    // ① 优雅关闭：SIGTERM 让 Electron 正常退出并摘除托盘图标，避免幽灵图标。
     for name in ["zcode", "ZCode"] {
         let _ = no_window("pkill").args(["-x", name]).output();
     }
-    let soft_deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < soft_deadline {
-        if !zcode_running() {
-            return Ok(true);
-        }
-        std::thread::sleep(Duration::from_millis(400));
+    if wait_zcode_exit(GRACEFUL_EXIT_TIMEOUT) {
+        return Ok(true);
     }
-    if zcode_running() {
-        for name in ["zcode", "ZCode"] {
-            let _ = no_window("pkill").args(["-9", "-x", name]).output();
-        }
+    // ② 兜底强杀。
+    eprintln!(
+        "[zsw] ZCode 优雅关闭超时 {}s，回退 SIGKILL（本次可能残留托盘幽灵图标）",
+        GRACEFUL_EXIT_TIMEOUT.as_secs()
+    );
+    for name in ["zcode", "ZCode"] {
+        let _ = no_window("pkill").args(["-9", "-x", name]).output();
     }
-    let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
-        if !zcode_running() {
-            return Ok(true);
-        }
-        std::thread::sleep(Duration::from_millis(400));
-    }
-    Ok(!zcode_running())
+    Ok(wait_zcode_exit(FORCED_EXIT_TIMEOUT))
 }
 
 pub fn launch_zcode(path: &str) -> Result<(), String> {
@@ -1518,6 +1662,8 @@ pub fn get_state(paths: &Paths) -> Result<AppState, String> {
         close_to_tray: settings.close_to_tray(),
         hot_switch: settings.hot_switch(),
         auto_claim: settings.auto_claim(),
+        activity_probe: settings.activity_probe(),
+        claim_at_effective: settings.claim_at_effective(),
         auth_proxy_on: settings.auth_proxy_on.unwrap_or(false),
         auth_proxy_url: settings.auth_proxy_url.clone(),
         language: crate::i18n::current().as_str().to_string(),

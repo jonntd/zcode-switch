@@ -20,7 +20,7 @@ fn no_window(prog: &str) -> std::process::Command {
 pub const QUOTA_LIMIT_URL: &str = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 pub const SUBSCRIPTION_URL: &str = "https://open.bigmodel.cn/api/biz/subscription/list";
 pub const BILLING_BALANCE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
-pub const CLIENT_APP_VERSION: &str = "3.11.2";
+pub const CLIENT_APP_VERSION: &str = "3.16.3";
 
 pub(crate) fn client_platform() -> String {
     let os = crate::zcrypto::node_platform_for(std::env::consts::OS);
@@ -130,6 +130,15 @@ pub(crate) fn client_timezone() -> String {
 }
 
 pub(crate) fn zcode_app_version() -> String {
+    let detected = detected_app_version();
+    // changelog 缓存只读文件（后台线程负责保鲜），过期旧值仍参与 max——旧值也比常量新鲜
+    match crate::changelog::cached_latest(&crate::store::Paths::detect().home) {
+        Some(v) if version_ge(&v, &detected) => v,
+        _ => detected,
+    }
+}
+
+fn detected_app_version() -> String {
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHE
         .get_or_init(|| {
@@ -147,7 +156,7 @@ pub(crate) fn zcode_app_version() -> String {
                     let l = line.trim();
                     if l.starts_with("HKEY_") {
                         if is_zcode_display_name(&name) && !ver.is_empty() {
-                            return normalize_version(&ver);
+                            return pick_app_version(&ver);
                         }
                         name.clear();
                         ver.clear();
@@ -160,7 +169,7 @@ pub(crate) fn zcode_app_version() -> String {
                     }
                 }
                 if is_zcode_display_name(&name) && !ver.is_empty() {
-                    return normalize_version(&ver);
+                    return pick_app_version(&ver);
                 }
             }
             CLIENT_APP_VERSION.to_string()
@@ -173,12 +182,40 @@ fn is_zcode_display_name(name: &str) -> bool {
     l.contains("zcode") && !l.contains("switch")
 }
 
+fn version_ge(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .map(|p| p.trim().parse().unwrap_or(0))
+            .collect()
+    };
+    let (pa, pb) = (parse(a), parse(b));
+    for i in 0..pa.len().max(pb.len()) {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    true
+}
+
 fn normalize_version(v: &str) -> String {
     let parts: Vec<&str> = v.split('.').collect();
     if parts.len() >= 3 {
         format!("{}.{}.{}", parts[0], parts[1], parts[2])
     } else {
         v.to_string()
+    }
+}
+
+/// 上报版本取 max(本机探测版本, 最新已知版本)：活动/套餐按客户端版本门槛下发，
+/// 探测值过旧（或客户端未安装）时回退到内置最新已知版本，避免新活动被服务端过滤。
+fn pick_app_version(detected: &str) -> String {
+    let normalized = normalize_version(detected);
+    if version_ge(CLIENT_APP_VERSION, &normalized) {
+        CLIENT_APP_VERSION.to_string()
+    } else {
+        normalized
     }
 }
 
@@ -1470,5 +1507,21 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         refreshed_at: 0,
         source: String::new(),
         plans: slots,
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::version_ge;
+
+    #[test]
+    fn version_ge_semantics() {
+        assert!(version_ge("3.16.3", "3.16.3"));
+        assert!(version_ge("3.16.3", "3.11.2"));
+        assert!(!version_ge("3.11.2", "3.16.3"));
+        assert!(version_ge("3.16.3", "3.16.3.0"));
+        assert!(!version_ge("3.9", "3.10"));
+        assert!(version_ge("4.0", "3.99.99"));
+        assert!(version_ge("3.16", "3.16.0"));
     }
 }
