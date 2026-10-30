@@ -275,7 +275,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                     )),
                 );
             }
-            ok(Value::Object(out))
+            ok0(Value::Object(out))
         }
         // 诊断用：查该账号「已生效」的套餐（billing/current）+ 本地领取历史。
         // 用于区分「服务端没下发活动（无资格）」与「已经领过了（此处或别处）」。
@@ -297,7 +297,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                 acc.config.as_ref(),
                 Some(mid),
             ) {
-                Ok(plans) => ok(json!({
+                Ok(plans) => ok0(json!({
                     "id": acc.id,
                     "name": acc.name,
                     "plans": plans,
