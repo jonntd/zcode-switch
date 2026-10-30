@@ -1755,6 +1755,7 @@ function renderInner() {
           <button class="icon-btn${rowOff ? " is-off" : ""}" title="${esc(rowTitle)}" aria-label="${esc(rowTitle)}"
             click="actions.acctRefreshClaim('${a.id}')">${ic("refresh", 16)}${rowCd > 0 && !acctRefreshBusy[a.id] ? `<span class="ic-badge" data-cd-id="${a.id}">${rowCd}</span>` : ""}</button>
           <button class="icon-btn" title="${t("btn.quota")}" aria-label="${t("btn.quota")}" click="actions.acctQuota('${a.id}')">${ic("gauge", 16)}</button>
+          <button class="icon-btn" title="${t("pf.rowLaunchTitle")}" aria-label="${t("pf.rowLaunchTitle")}" click="actions.launchForAccount('${a.id}')">${ic("play", 16)}</button>
           <button class="icon-btn" title="${t("btn.rename")}" aria-label="${t("btn.rename")}" click="actions.rename('${a.id}')">${ic("pen", 16)}</button>
           <button class="icon-btn" title="${t("btn.export")}" aria-label="${t("btn.export")}" click="actions.exportOne('${a.id}')">${ic("export", 16)}</button>
           <button class="icon-btn danger" title="${t("btn.delete")}" aria-label="${t("btn.delete")}" click="actions.delete('${a.id}')">${ic("x", 16)}</button>
@@ -1894,6 +1895,15 @@ async function reloadProfiles() {
 }
 
 Object.assign(actions, {
+  async launchForAccount(accountId) {
+    await guard(async () => {
+      const p = await invoke("profile_launch_for_account", { accountId });
+      toast(p?.alreadyRunning
+        ? t("pf.alreadyRunning", { name: p.name })
+        : t("pf.toastLaunched", { name: p.name }));
+      await reloadProfiles();
+    });
+  },
   profileToggleForm() {
     profileFormOpen = !profileFormOpen;
     render();

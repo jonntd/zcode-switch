@@ -490,6 +490,27 @@ pub fn run(args: &[String]) -> (String, i32) {
                     }
                 }
                 "launch" => {
+                    if let Some(acc) = flag(sub_rest, "--account") {
+                        return match crate::profile::ensure_profile_for_account(&paths, &acc)
+                            .and_then(|p| {
+                                let running = crate::profile::profile_running(&paths, &p);
+                                if running {
+                                    Ok((p, 0, true))
+                                } else {
+                                    crate::profile::launch_profile(&paths, &p).map(|pid| (p, pid, false))
+                                }
+                            }) {
+                            Ok((p, _pid, was_running)) => (
+                                ok(json!({
+                                    "launched": p.data_root,
+                                    "profile": p.id,
+                                    "alreadyRunning": was_running,
+                                })),
+                                0,
+                            ),
+                            Err(e) => return (err(&e), 1),
+                        };
+                    }
                     let Some(id) = flag(sub_rest, "--id").or_else(|| profile_id.clone()) else {
                         return (err(&crate::i18n::tr("cli.profile.launch_usage")), 2);
                     };

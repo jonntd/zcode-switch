@@ -397,6 +397,25 @@ pub fn kill_profile(paths: &Paths, p: &Profile) -> Result<bool, String> {
     Ok(true)
 }
 
+/// 按账号定位（或自动创建）其专属 Profile：一账号一实例，幂等。
+/// data_root 固定为 <store_dir>/instances/<account_id>，重复调用返回同一 Profile。
+pub fn ensure_profile_for_account(paths: &Paths, account_id: &str) -> Result<Profile, String> {
+    let acc = crate::store::load_account(paths, account_id)?;
+    let profiles = list_profiles(paths);
+    if let Some(p) = profiles.iter().find(|p| p.account_id.as_deref() == Some(account_id)) {
+        return Ok(p.clone());
+    }
+    let root = paths.store_dir().join("instances").join(account_id);
+    create_profile(
+        paths,
+        &acc.name,
+        &root.to_string_lossy(),
+        None,
+        Some(account_id.to_string()),
+        None,
+    )
+}
+
 pub fn profile_value(paths: &Paths, p: &Profile) -> Value {
     let running = profile_running(paths, p);
     let pid = fs::read_to_string(pid_file(paths, &p.id))
