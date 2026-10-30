@@ -403,6 +403,12 @@ async fn claim_start(
         if auto.unwrap_or(false) && risk::is_cooling(&paths, &id) {
             return Err(i18n::tr("err.risk.cooling_auto"));
         }
+        // 纵深防御：pending 是全局单例（验证码窗口/提交都绑定它），
+        // 前端虽有 claimActive 互斥，这里再挡一道，防止未来新调用点覆盖
+        // 已有 pending 导致验证码提交用错账号凭据
+        if pending_guard().is_some() {
+            return Err(i18n::tr("err.claim.busy"));
+        }
         let plans = claim::collect_claimable_plans(
             &paths.home,
             &acc.credentials,
@@ -495,6 +501,7 @@ async fn claim_captcha_submit(
                 let outcome = claim::ClaimOutcome {
                     account_id: pending.account_id.clone(),
                     account_name: pending.account_name.clone(),
+                    plan_id: pending.plan_id.clone(),
                     plan_name: pending.plan_name.clone(),
                     starts_at: ms("starts_at"),
                     ends_at: ms("ends_at"),

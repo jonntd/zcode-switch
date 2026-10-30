@@ -91,6 +91,7 @@ pub struct CaptchaConfig {
 pub struct ClaimOutcome {
     pub account_id: String,
     pub account_name: String,
+    pub plan_id: String,
     pub plan_name: String,
     pub starts_at: Option<i64>,
     pub ends_at: Option<i64>,

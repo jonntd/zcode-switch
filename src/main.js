@@ -47,7 +47,7 @@ const PROBE = {
   acctDelayMs: 5 * 60_000,    // 每个账号独立再取 U(0,5min) 延迟
   acctGapMs: 60 * 60_000,     // 账号级最小间隔
   perAcctDaily: 20,           // 每账号每日配额
-  lowGapMs: 3 * 3600_000,     // 12:00–16:00 与达配额后的间隔
+  lowGapMs: 3 * 3600_000,     // 达日配额后的账号级间隔；也是低活跃窗口（12–16 点）的轮次间隔
   reqGapMs: [20_000, 90_000], // 串行请求间隔
 };
 let probe = { timer: null, nextAt: 0, running: false, roundRunning: false, lastAt: {}, done: {}, day: "", baselineDay: "", lastSummary: null };
@@ -142,7 +142,10 @@ function claimTimeRange(p) {
 
 const AUTO_CLAIM_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_CLAIM_FIRST_DELAY_MS = 2 * 60 * 1000;
-const AUTO_CLAIM_WAIT_MS = 45_000;
+// 自动领取等待上限：静默解验证码 + 上游提交，45s 实测偏短（超时会白白取消一笔可能成功的提交）
+const AUTO_CLAIM_WAIT_MS = 90_000;
+// 领取节奏：与探测侧一致的随机间隔，失败路径同样遵守——避免规律性脚本特征触发风控
+const claimPace = () => rand(1500, 6000);
 
 const AUTO_ABORT_WAIT_MS = 90_000;
 let autoClaimRunning = false;
@@ -875,8 +878,12 @@ async function runClaimTargets(targets, source) {
       try {
         await invoke("claim_start", { id, planId: plan.plan_id, auto: true });
       } catch (e) {
-        autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+        // 失败原因未知（可能是单个活动下线/过期）：plan 级挂起 + 账号级短冷却，
+        // 避免一个失效活动把同账号其他可领活动连坐 10 分钟
+        claimHold[claimHoldKey(id, plan.plan_id)] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+        autoClaimCooldown[id] = Date.now() + 2 * 60_000;
         roundSkipped++;
+        await sleep(claimPace());
         continue;
       }
       const r = await waitForClaimResult(id, AUTO_CLAIM_WAIT_MS);
@@ -884,12 +891,14 @@ async function runClaimTargets(targets, source) {
         await cancelClaimIfMine(id, plan.plan_id);
         autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
         roundSkipped++;
+        await sleep(claimPace());
         continue;
       }
       if (r.ok === false) {
         claimHold[claimHoldKey(id, plan.plan_id)] = holdForClaim(r);
         autoClaimCooldown[id] = autoClaimCooldownFor(r);
         roundSkipped++;
+        await sleep(claimPace());
         continue;
       }
       markClaimed(id, plan.plan_id);
@@ -897,7 +906,7 @@ async function runClaimTargets(targets, source) {
       await awaitClaimPreviewFresh(id).catch(() => {});
       await fetchClaimed(id);
       if (!uiLocked()) scheduleRender();
-      await new Promise((res) => setTimeout(res, 1200));
+      await sleep(claimPace());
     }
   } finally {
     autoClaimRunning = false; claimActive = false;
@@ -1052,12 +1061,18 @@ function saveProbeState() {
 function logProbe(msg) {
   invoke("log_probe", { message: String(msg).slice(0, 500) }).catch(() => {});
 }
+// 静默期缓存：probeRound/probeOnce 每账号都会查一次，直接读内存，
+// 只在 applyProbeResult 写入时落 localStorage（同一对象引用，天然同步）
+let quiesceCache = null;
 function knownQuiesce() {
-  try {
-    return JSON.parse(localStorage.getItem(KNOWN_KEY) || "{}");
-  } catch {
-    return {};
+  if (!quiesceCache) {
+    try {
+      quiesceCache = JSON.parse(localStorage.getItem(KNOWN_KEY) || "{}");
+    } catch {
+      quiesceCache = {};
+    }
   }
+  return quiesceCache;
 }
 function isQuiesced(id, now = Date.now()) {
   const k = knownQuiesce()[id];
@@ -1248,11 +1263,14 @@ async function probeRound(force = false) {
       const step = Math.max(0, delays[i] - waited);
       if (step > 0) await sleep(step);
       waited += step;
+      // 等待期间开关被关/切了轻量模式：立即停，不再发剩余请求
+      if (!state?.activity_probe || isLight()) return;
       await probeOnce([picked[i]], force);
       if (i < picked.length - 1) {
         const gap = rand(PROBE.reqGapMs[0], PROBE.reqGapMs[1]);
         await sleep(gap);
         waited += gap;
+        if (!state?.activity_probe || isLight()) return;
       }
     }
   }
@@ -1348,8 +1366,10 @@ function checkReminders() {
     if (firedReminders.has(r.key)) continue;
     firedReminders.add(r.key);
     saveReminders();
+    // 不强制抢焦点打开弹窗（用户可能正在操作）：toast + 托盘闪烁引导，点击再开详情
     toast(t(r.kind === "start" ? "act.startReminder" : "act.effectiveReminder", { name: r.name, title: r.title }), "ok");
-    openActivityModal({ rows: activityRows().filter((x) => x.accountId === r.accountId), focusAccount: r.accountId });
+    setActivityTip(t("act.tipShort", { title: r.title }));
+    flashTray(0);
     if (state?.claim_at_effective) scheduleClaimAtEffective();
   }
 }
@@ -2120,13 +2140,19 @@ listen("tray-action", (ev) => {
 
 listen("claim://result", (ev) => {
   const p = ev.payload || {};
-  if (claimWaiter && claimWaiter.accountId === p.accountId) claimWaiter.finish(p);
+  // 本账号是否仍有等待者在收这笔结果（超时/轮次更替后可能是「无主」的迟到结果）
+  const waiterMine = claimWaiter && claimWaiter.accountId === p.accountId;
+  if (waiterMine) claimWaiter.finish(p);
   if (p.ok === false) {
     let msg = p.message || t("m.unknownErr");
     if (p.code === 1005 && p.nextAt) {
       msg += t("m.claimNextAt", { time: new Date(p.nextAt).toLocaleString(localeTag(), { hour12: false }) });
     }
     toast(t("m.claimFailed", { name: p.accountName, msg }), "err");
+    // 无主迟到失败：也要落 plan 级挂起，避免下一次自动轮反复撞同一笔
+    if (!waiterMine && p.accountId && p.planId) {
+      claimHold[claimHoldKey(p.accountId, p.planId)] = holdForClaim(p);
+    }
   } else {
     const bits = [];
     const now = p.serverTime || Date.now();
@@ -2134,6 +2160,9 @@ listen("claim://result", (ev) => {
     if (effAt && effAt > now) bits.push(t("m.claimEffectiveAt", { time: new Date(effAt).toLocaleString(localeTag(), { hour12: false }) }));
     if (p.endsAt) bits.push(t("m.claimEndsAt", { time: new Date(p.endsAt).toLocaleString(localeTag(), { hour12: false }) }));
     toast(t("m.claimOk", { name: p.accountName, plan: p.planName }), "ok", bits.join(t("common.listSep")));
+    // 无主迟到成功：等待者已超时走掉了，这里补落已领标记，否则探测缓存里的
+    // 旧条目会让「可领」一直挂着（上游已领，重试只会撞 err.claim.gone）
+    if (!waiterMine && p.accountId && p.planId) markClaimed(p.accountId, p.planId);
   }
   if (p.accountId) {
     loadAcctQuota(p.accountId, true);
