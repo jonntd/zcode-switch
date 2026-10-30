@@ -243,8 +243,7 @@ function isLight() {
 }
 
 async function refresh() {
-  state = await invoke("get_state");
-  if (state?.language) init(state.language);
+  noteState(await invoke("get_state"));
   try {
     profiles = (await invoke("profile_list"))?.profiles || [];
   } catch { /* profile 功能不可用时静默降级 */ }
@@ -641,7 +640,7 @@ const actions = {
         refreshClaim.done = i + 1;
         refreshClaim.current = name;
         claimable[id] = { plans: claimable[id]?.plans || [], busy: true };
-        if (!uiLocked()) render();
+        if (!uiLocked()) scheduleRender();
         try {
           const r = await invokeWithTimeout("claim_refresh", { id, force: true });
           claimable[id] = { plans: r.plans || [], err: null, busy: false };
@@ -653,7 +652,7 @@ const actions = {
           toast(t("m.refreshClaimAcctErr", { name, err: stripErr(e) }), "err");
         }
         scheduleNext(id);
-        if (!uiLocked()) render();
+        if (!uiLocked()) scheduleRender();
         if (i < ids.length - 1) await new Promise((res) => setTimeout(res, 5000));
       }
     } finally {
@@ -673,7 +672,7 @@ const actions = {
     acctRefreshCooldown[id] = 0;
     startRefreshTicker();
     claimable[id] = { plans: claimable[id]?.plans || [], busy: true };
-    if (!uiLocked()) render();
+    if (!uiLocked()) scheduleRender();
     try {
       const r = await invokeWithTimeout("claim_refresh", { id, force: true });
       claimable[id] = { plans: r.plans || [], err: null, busy: false };
@@ -686,7 +685,7 @@ const actions = {
       acctRefreshBusy[id] = false;
       acctRefreshCooldown[id] = Date.now() + REFRESH_CLAIM_COOLDOWN_MS;
       scheduleNext(id);
-      if (!uiLocked()) render();
+      if (!uiLocked()) scheduleRender();
       setTimeout(stopRefreshTickerIfIdle, 1100);
     }
   },
@@ -744,7 +743,7 @@ function tickCooldowns() {
       needRender = true;
     }
   }
-  if (needRender || refreshClaim.running) render();
+  if (needRender || refreshClaim.running) scheduleRender();
 }
 
 function startRefreshTicker() {
@@ -846,7 +845,7 @@ function autoTargets() {
 async function runClaimTargets(targets, source) {
   autoClaimRunning = true; claimActive = true; autoAbortRequested = false;
   let roundClaimed = 0, roundSkipped = 0;
-  if (!uiLocked()) render();
+  if (!uiLocked()) scheduleRender();
   try {
     for (const t of targets) {
       if (autoAbortRequested) break;
@@ -878,7 +877,7 @@ async function runClaimTargets(targets, source) {
       roundClaimed++;
       await awaitClaimPreviewFresh(id).catch(() => {});
       await fetchClaimed(id);
-      if (!uiLocked()) render();
+      if (!uiLocked()) scheduleRender();
       await new Promise((res) => setTimeout(res, 1200));
     }
   } finally {
@@ -887,7 +886,7 @@ async function runClaimTargets(targets, source) {
       lastAutoRound = { at: Date.now(), claimed: roundClaimed, skipped: roundSkipped };
     }
     logProbe(`claim round(${source}) claimed=${roundClaimed} skipped=${roundSkipped}`);
-    if (!uiLocked()) render();
+    if (!uiLocked()) scheduleRender();
   }
 }
 
@@ -901,7 +900,7 @@ async function autoClaimTick() {
   const targets = autoTargets();
   if (!targets.length) {
     lastAutoRound = { at: Date.now(), claimed: 0, skipped: 0, noActivity: true };
-    if (!uiLocked()) render();
+    if (!uiLocked()) scheduleRender();
     return;
   }
   await runClaimTargets(targets, "auto");
@@ -1067,7 +1066,7 @@ function applyProbeResult(item) {
     try { localStorage.setItem(KNOWN_KEY, JSON.stringify(known)); } catch { /* ignore */ }
   }
   notifyNewActivities(id, plans, true);
-  if (!uiLocked()) render();
+  if (!uiLocked()) scheduleRender();
 }
 
 /// 发现去重与提醒：无论「可领」还是「已领取」，只要是首次见到的活动就弹一次 toast；
@@ -1176,7 +1175,7 @@ async function probeOnce(ids, force = false, withClaimed = false) {
           // 「已领取/待生效」那一条，否则活动会从列表里消失。基线每天只做一次，成本可控。
           await fetchClaimed(id);
           notifyNewActivities(id, claimedState[id]?.plans || [], false);
-          if (!uiLocked()) render();
+          if (!uiLocked()) scheduleRender();
         }
       } catch (e) {
         logClientError(`probe ${id}: ${stripErr(e)}`);
@@ -1275,7 +1274,7 @@ async function probeBaseline(today) {
     }
     probe.baselineDay = today;
     saveProbeState();
-    if (!uiLocked()) render();
+    if (!uiLocked()) scheduleRender();
     logProbe("baseline done");
   } finally {
     probe.roundRunning = false;
@@ -1742,6 +1741,25 @@ function render() {
   }
 }
 
+/// 合并短时间内的多次重绘请求：后台逐账号刷新/探测/自动领取会连续触发 render，
+/// 每次都全量重建 innerHTML 会造成明显卡顿。120ms 内的多次请求合并为一次。
+let renderTimer = null;
+function scheduleRender() {
+  if (renderTimer) return;
+  renderTimer = setTimeout(() => {
+    renderTimer = null;
+    if (!uiLocked()) render();
+  }, 120);
+}
+
+/// 轻量重绘判据：5s 轮询拿到的 state 与上次一致时不重绘（JSON 签名比对）。
+let lastStateSig = null;
+function noteState(s) {
+  state = s;
+  lastStateSig = JSON.stringify(s);
+  if (s?.language) init(s.language);
+}
+
 function renderInner() {
   const scrollCap = captureScroll();
   if (!state) {
@@ -2100,7 +2118,7 @@ listen("claim://result", (ev) => {
   if (p.accountId) {
     loadAcctQuota(p.accountId, true);
     if (!autoClaimRunning) {
-      loadClaimPreview(p.accountId).then(() => { if (!uiLocked()) render(); });
+      loadClaimPreview(p.accountId).then(() => { if (!uiLocked()) scheduleRender(); });
     }
     scheduleNext(p.accountId);
   }
@@ -2170,7 +2188,7 @@ async function sweepTick() {
   try {
     await loadAcctQuota(due.id);
     if (quotaDue[due.id] === dueAt) scheduleNext(due.id);
-    if (!uiLocked()) render();
+    if (!uiLocked()) scheduleRender();
   } finally {
     ticking = false;
   }
@@ -2186,7 +2204,15 @@ async function sweepTick() {
     enrollAccounts();
     sweepTick();
     setInterval(() => {
-      invoke("get_state").then((s) => { state = s; if (s?.language) init(s.language); enrollAccounts(); if (!uiLocked()) render(); }).catch(() => {});
+      invoke("get_state").then((s) => {
+        // state 签名未变则跳过重绘；但刷新冷却倒计时期间仍需周期重绘（倒计时标签依赖它）
+        const cdActive = refreshClaim.cooldownUntil > Date.now()
+          || Object.values(acctRefreshCooldown).some((t) => t > Date.now());
+        const changed = JSON.stringify(s) !== lastStateSig || cdActive;
+        noteState(s);
+        enrollAccounts();
+        if (changed) scheduleRender();
+      }).catch(() => {});
     }, 5000);
     setInterval(sweepTick, TICK_MS);
     setTimeout(autoClaimTick, AUTO_CLAIM_FIRST_DELAY_MS);
