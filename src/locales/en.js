@@ -150,6 +150,8 @@ export const en = {
   "btn.claimAllTitle": "Complete verification and claim for each account (one claim per account)",
   "btn.autoClaim": "Auto claim",
   "btn.autoClaimTitle": "When on, checks claimable plans every 10 min and claims automatically (activates eligibility once per account first; captcha solved silently, alerts if manual verification needed)",
+  "btn.light": "Light",
+  "btn.lightTitle": "Light mode: disables background quota polling, activity probing, auto claim and reminders; manual actions only — usage shows last manual refresh",
   "btn.claim": "Claim",
   "btn.acctRefreshTitle": "Refresh this account's event eligibility and claimable plans (rate-limited)",
   "btn.refreshClaim": "Refresh",

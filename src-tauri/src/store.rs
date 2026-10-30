@@ -148,6 +148,9 @@ pub struct Settings {
     /// 到点自动领取（默认关，依赖 auto_claim）：活动开始后触发一次自动领取。
     #[serde(default)]
     pub claim_at_effective: Option<bool>,
+    /// 轻量模式（默认关）：关闭后台额度轮询、活动探测、自动领取与提醒，仅保留手动操作。
+    #[serde(default)]
+    pub light_mode: Option<bool>,
 }
 
 impl Settings {
@@ -156,6 +159,7 @@ impl Settings {
     pub fn hot_switch(&self) -> bool { self.hot_switch.unwrap_or(false) }
     pub fn auto_claim(&self) -> bool { self.auto_claim.unwrap_or(false) }
     pub fn activity_probe(&self) -> bool { self.activity_probe.unwrap_or(false) }
+    pub fn light_mode(&self) -> bool { self.light_mode.unwrap_or(false) }
     pub fn claim_at_effective(&self) -> bool { self.claim_at_effective.unwrap_or(false) }
     pub fn auth_proxy(&self) -> Option<&str> {
         if self.auth_proxy_on.unwrap_or(false) {
@@ -196,6 +200,7 @@ pub struct AppState {
     pub hot_switch: bool,
     pub auto_claim: bool,
     pub activity_probe: bool,
+    pub light_mode: bool,
     pub claim_at_effective: bool,
     pub auth_proxy_on: bool,
     pub auth_proxy_url: Option<String>,
@@ -1700,6 +1705,7 @@ pub fn get_state(paths: &Paths) -> Result<AppState, String> {
         hot_switch: settings.hot_switch(),
         auto_claim: settings.auto_claim(),
         activity_probe: settings.activity_probe(),
+        light_mode: settings.light_mode(),
         claim_at_effective: settings.claim_at_effective(),
         auth_proxy_on: settings.auth_proxy_on.unwrap_or(false),
         auth_proxy_url: settings.auth_proxy_url.clone(),

@@ -237,14 +237,21 @@ function idLabel(id) {
   return id.display_name || id.username || id.email || null;
 }
 
+/// 轻量模式：关闭后台轮询/探测/自动领取/提醒，只保留手动操作
+function isLight() {
+  return state?.light_mode === true;
+}
+
 async function refresh() {
   state = await invoke("get_state");
   if (state?.language) init(state.language);
   try {
     profiles = (await invoke("profile_list"))?.profiles || [];
   } catch { /* profile 功能不可用时静默降级 */ }
-  maybeStartProbe();
-  startReminderTicker();
+  if (!isLight()) {
+    maybeStartProbe();
+    startReminderTicker();
+  }
 }
 
 function uiLocked() {
@@ -705,6 +712,16 @@ const actions = {
     } catch (e) { toast(stripErr(e), "err"); }
     finally { autoToggleBusy = false; }
   },
+
+  async toggleLight() {
+    const next = !isLight();
+    try {
+      // 开启轻量模式时强制关闭自动领取（后台轮询已停，自动领取没有数据来源）
+      await invoke("set_behavior", next ? { lightMode: true, autoClaim: false } : { lightMode: false });
+      await refresh();
+      render();
+    } catch (e) { toast(stripErr(e), "err"); }
+  },
 };
 
 /// 冷却倒计时的「局部更新」：只改角标/顶部文案，避免每秒重建 innerHTML 导致行高抖动与滚动跳动。
@@ -875,6 +892,7 @@ async function runClaimTargets(targets, source) {
 }
 
 async function autoClaimTick() {
+  if (isLight()) return;
   if (!state?.auto_claim || autoClaimRunning) return;
   if (claimActive || claimAllRunning || refreshClaim.running) return;
 
@@ -892,6 +910,7 @@ async function autoClaimTick() {
 /// 到点自动领取（独立开关）：只要求「已到点且尚未领取」，
 /// 不再只依赖「未来时间点的提醒」——否则开关打开时已经开始的活动永远不会被领。
 async function effectiveClaimTick() {
+  if (isLight()) return;
   if (!state?.claim_at_effective) return;
   if (claimActive || claimAllRunning || refreshClaim.running || autoClaimRunning) {
     logProbe("effective tick skip(busy)");
@@ -1884,24 +1903,35 @@ function renderInner() {
         ${ic("capture", 14)} ${t("btn.saveLogin")}
       </button>
       <button class="btn-ghost has-ic" click="actions.addAccount()" title="${t("btn.addAccountTitle")}">${ic("userPlus", 14)} ${t("btn.addAccount")}</button>
-      ${claimableCount > 0
+      ${!isLight() && claimableCount > 0
         ? `<button class="btn-ghost has-ic claim-all" click="actions.claimAll()" ${claimAllRunning || refreshClaim.running || autoClaimRunning ? "disabled" : ""}
             title="${t("btn.claimAllTitle")}">${ic("gift", 14)} ${t("btn.claimAll")}${claimableCount > 1 ? ` (${claimableCount})` : ""}</button>`
         : ""}
-      ${(s.accounts.length > 0)
+      ${!isLight() && (s.accounts.length > 0)
         ? `<button class="btn-ghost has-ic${refreshTopOff ? " is-off" : ""}" click="actions.refreshClaim()"
             title="${esc(refreshTopTitle)}">${ic("refresh", 14)} <span id="refresh-claim-label">${esc(refreshTopLabel)}</span></button>`
         : ""}
-      <button class="btn-ghost has-ic${actCount ? "" : " is-off"}" click="actions.openActivity()"
-        title="${esc(actBtnTitle)}">
-        ${ic("gift", 14)} ${esc(t("btn.activity"))}${actCount ? ` (${actCount})` : ""}
-      </button>
-      <button class="tog-inline${s.auto_claim ? " on" : ""}${autoClaimRunning ? " running" : ""}"
-        role="switch" aria-checked="${s.auto_claim}" aria-label="${t("btn.autoClaim")}"
-        title="${autoPillTitle(s)}"
-        click="actions.toggleAutoClaim()">
-        <span class="toggle${s.auto_claim ? " on" : ""}" aria-hidden="true"><span class="knob"></span></span>
-        ${t("btn.autoClaim")}
+      ${!isLight()
+        ? `<button class="btn-ghost has-ic${actCount ? "" : " is-off"}" click="actions.openActivity()"
+            title="${esc(actBtnTitle)}">
+            ${ic("gift", 14)} ${esc(t("btn.activity"))}${actCount ? ` (${actCount})` : ""}
+          </button>`
+        : ""}
+      ${!isLight()
+        ? `<button class="tog-inline${s.auto_claim ? " on" : ""}${autoClaimRunning ? " running" : ""}"
+            role="switch" aria-checked="${s.auto_claim}" aria-label="${t("btn.autoClaim")}"
+            title="${autoPillTitle(s)}"
+            click="actions.toggleAutoClaim()">
+            <span class="toggle${s.auto_claim ? " on" : ""}" aria-hidden="true"><span class="knob"></span></span>
+            ${t("btn.autoClaim")}
+          </button>`
+        : ""}
+      <button class="tog-inline${isLight() ? " on" : ""}"
+        role="switch" aria-checked="${isLight()}" aria-label="${t("btn.light")}"
+        title="${t("btn.lightTitle")}"
+        click="actions.toggleLight()">
+        <span class="toggle${isLight() ? " on" : ""}" aria-hidden="true"><span class="knob"></span></span>
+        ${t("btn.light")}
       </button>
       ${s.zcode_running
         ? `<button class="btn-ghost has-ic" click="actions.askKill()" title="${t("btn.killZcode")}">${ic("power", 14)} ${t("btn.killZcode")}</button>`
@@ -2127,6 +2157,7 @@ function enrollAccounts() {
 function pokeAccount(id) { if (id) quotaDue[id] = Date.now(); }
 
 async function sweepTick() {
+  if (isLight()) return;
   if (ticking) return;
   enrollAccounts();
   const now = Date.now();

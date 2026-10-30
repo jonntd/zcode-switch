@@ -1408,6 +1408,7 @@ async fn set_behavior(
     auto_claim: Option<bool>,
     activity_probe: Option<bool>,
     claim_at_effective: Option<bool>,
+    light_mode: Option<bool>,
 ) -> Result<(), String> {
     let _guard = store_guard();
     let paths = Paths::detect();
@@ -1429,6 +1430,9 @@ async fn set_behavior(
     }
     if let Some(v) = claim_at_effective {
         s.claim_at_effective = Some(v);
+    }
+    if let Some(v) = light_mode {
+        s.light_mode = Some(v);
     }
     let r = save_settings(&paths, &s);
     rebuild_tray(&app);
