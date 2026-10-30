@@ -1275,7 +1275,17 @@ pub fn seed_profile_account(
     profile_paths: &Paths,
     account_id: &str,
 ) -> Result<(), String> {
+    // 必须先建好 Profile 的 Electron userData 目录：arms_store_dirs_for 只在
+    // <data_root>/user-data 存在时才写 Profile 自己的 rum-electron-store；
+    // 否则（首启前目录不存在）arms uid 会漏写到全局 appData，实例启动后在
+    // 全新 userData 里生成新 uid → 设备识别对不上 → Start Plan 等绑定设备的
+    // 权益不可用、登录态展示异常
+    let _ = fs::create_dir_all(profile_paths.data_root.join("user-data"));
     let acc = load_account(main_paths, account_id)?;
+    // arms uid 修正放在幂等短路之前：此前版本实例可能已把 uid 漏写到全局 appData
+    // 或让 ZCode 生成了新 uid，即使凭据已同步也要把它写回 Profile 自己的 store
+    let uid = ensure_virtual_arms_uid_locked(main_paths, account_id)?;
+    let _ = write_live_arms_uid(profile_paths, &uid);
     if let Ok(Some(live)) = read_live(profile_paths) {
         if is_logged_in(&live) && canonical_hash(&live) == acc.hash {
             return Ok(());
@@ -1283,17 +1293,20 @@ pub fn seed_profile_account(
     }
     let creds = inject_relay_pass_hash(&acc.credentials, current_relay_pass(main_paths).as_ref());
     write_live(profile_paths, &creds)?;
+    // 与 switch_to 一致：新代际（provider_config.json 在）跳过 config.json 写入与重物化
+    let new_gen = new_gen_provider_config(&profile_paths.data_root);
     if let Some(cfg) = &acc.config {
-        if !new_gen_provider_config(&profile_paths.data_root) {
+        if !new_gen {
             write_live_config(profile_paths, cfg)?;
         }
+    }
+    if !new_gen {
+        rematerialize_wiped_builtins(profile_paths, &acc);
     }
     reset_live_plan_cache(profile_paths);
     align_family_domain(profile_paths, &acc);
     let mid = ensure_virtual_device_mid_locked(main_paths, account_id)?;
     write_live_device_mid(profile_paths, &mid)?;
-    let uid = ensure_virtual_arms_uid_locked(main_paths, account_id)?;
-    let _ = write_live_arms_uid(profile_paths, &uid);
     Ok(())
 }
 

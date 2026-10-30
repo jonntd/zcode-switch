@@ -325,6 +325,9 @@ pub fn launch_profile(paths: &Paths, p: &Profile) -> Result<u32, String> {
     let root = PathBuf::from(&p.data_root);
     fs::create_dir_all(root.join(".zcode").join("v2"))
         .map_err(|e| trf("err.mkdir", &[("e", &e.to_string())]))?;
+    // userData 目录兜底创建：ZCODE_DESKTOP_USER_DATA_DIR 指向它，ZCode 启动时
+    // 需要从中读取 rum-electron-store（_arms_uid，与账号设备绑定一致）
+    let _ = fs::create_dir_all(root.join("user-data"));
     let mut cmd = detached(no_window(&bin));
     // ZCode 的数据根重定向入口；若客户端 home 的 setting.json 含 dataBaseDir，优先级以客户端实现为准
     cmd.env("ZCODE_DATA_BASE_DIR", &root);
