@@ -26,6 +26,8 @@ let profiles = [];
 let profileFormOpen = false;
 // 账号行「…」溢出菜单：当前展开的账号 id
 let rowMenuFor = null;
+// 额度详情面板：仅用户从菜单主动展开的账号才显示大面板，默认行内小色签
+let quotaOpen = {};
 
 // 活动中心：已探测到的活动（accountId -> ClaimPlan[]，含 campaign 元数据）
 let activities = {};
@@ -1608,27 +1610,59 @@ function claimedStripHtml(id) {
   return html;
 }
 
+/// 行内额度小色签：每个用量窗口一枚，`标签 百分比%`，颜色按余量分级。
+function quotaChipsHtml(id) {
+  const q = acctQuota[id];
+  if (!q?.data) return "";
+  const plans = q.data.plans || [];
+  let wins = [];
+  if (plans.length) {
+    for (const p of plans) {
+      for (const it of p.items || []) {
+        if (itemKind(it) === "prompt_count") wins.push({ it, tier: p.tier });
+      }
+    }
+  } else {
+    for (const it of q.data.items || []) {
+      if (itemKind(it) === "prompt_count") wins.push({ it });
+    }
+  }
+  if (!wins.length) return "";
+  const chip = ({ it, tier }) => {
+    const pct = Math.round(it.percent_used ?? 0);
+    const cls = pct >= 99 ? " danger" : pct >= 80 ? " warn" : "";
+    const rem = it.total != null && it.remaining != null ? ` · ${fmtTokens(it.remaining)}/${fmtTokens(it.total)}` : "";
+    const title = `${windowLabel(it)}${rem} · ${resetLabel(it)}`;
+    return `<span class="q-chip${cls}" title="${esc(title)}">${esc(windowLabel(it))} <b>${pct}%</b></span>`;
+  };
+  return `<div class="q-chips">${wins.slice(0, 4).map(chip).join("")}${wins.length > 4 ? `<span class="q-chip more">+${wins.length - 4}</span>` : ""}</div>`;
+}
+
 function acctQuotaSlot(id) {
   const strip = claimStripHtml(id);
   const q = acctQuota[id];
   let inner = "";
-  if (q?.busy) {
+  if (q?.busy && !q?.data) {
     inner = `<span class="aq-loading">${t("q.loading")}</span>`;
   } else if (q?.err) {
     const msg = q.err.length > 46 ? q.err.slice(0, 46) + "…" : q.err;
     inner = `<span class="aq-err">${esc(msg)}</span>`;
   } else if (q?.data) {
     const plans = q.data.plans || [];
-    if (plans.length >= 2) {
-      inner = plans.map(planGroupHtml).join("");
-    } else {
-      const items = q.data.items || [];
-      const wins = items.filter((it) => itemKind(it) === "prompt_count");
-      if (wins.length) {
-        inner = wins.map((it) => winRowHtml(it, " mini")).join("");
+    if (quotaOpen[id]) {
+      if (plans.length >= 2) {
+        inner = plans.map(planGroupHtml).join("");
       } else {
-        inner = slotRowsHtml(items);
+        const items = q.data.items || [];
+        const wins = items.filter((it) => itemKind(it) === "prompt_count");
+        if (wins.length) {
+          inner = wins.map((it) => winRowHtml(it, " mini")).join("");
+        } else {
+          inner = slotRowsHtml(items);
+        }
       }
+    } else {
+      inner = quotaChipsHtml(id);
     }
     // 额度防线：服务器侧余额不含一次性赠送池，全部耗尽但赠送池生效中时提示，防误判白领
     const exhaustedAll = plans.length > 0 && plans.every((p) => (p.percent_used ?? 100) >= 99.5);
@@ -1641,7 +1675,7 @@ function acctQuotaSlot(id) {
     }
   }
   const claimed = claimedStripHtml(id);
-  if (!strip && !claimed && !inner) return `<div class="row-quota-slot"></div>`;
+  if (!strip && !claimed && !inner) return "";
   return `<div class="row-quota-slot">${strip}${claimed}${inner}</div>`;
 }
 
@@ -1914,7 +1948,17 @@ Object.assign(actions, {
     rowMenuFor = null;
     render();
     if (kind === "refresh") actions.acctRefreshClaim(id);
-    else if (kind === "quota") actions.acctQuota(id);
+    else if (kind === "quota") {
+      // 切换详细面板；无数据时先加载，加载完成后自动展开
+      quotaOpen[id] = !quotaOpen[id];
+      render();
+      if (quotaOpen[id]) {
+        loadAcctQuota(id).then(() => {
+          if (!acctQuota[id]?.data) quotaOpen[id] = false;
+          if (!uiLocked()) render();
+        });
+      }
+    }
     else if (kind === "rename") actions.rename(id);
     else if (kind === "export") actions.exportOne(id);
     else if (kind === "delete") actions.delete(id);
