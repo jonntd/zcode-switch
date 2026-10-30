@@ -3,6 +3,7 @@ pub mod cli;
 pub mod i18n;
 mod claim;
 mod flowlog;
+pub mod profile;
 mod oauth;
 mod probe;
 mod quota;
@@ -1123,6 +1124,72 @@ async fn open_external(url: String) -> Result<(), String> {
     store::open_url(&url)
 }
 
+#[tauri::command]
+async fn profile_list() -> Result<serde_json::Value, String> {
+    let paths = Paths::detect();
+    Ok(profile::list_profiles_value(&paths))
+}
+
+#[tauri::command]
+async fn profile_create(
+    name: String,
+    data_root: String,
+    port: Option<u16>,
+    account_id: Option<String>,
+    zcode_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let paths = Paths::detect();
+    let p = profile::create_profile(&paths, &name, &data_root, port, account_id, zcode_path)?;
+    Ok(profile::profile_value(&paths, &p))
+}
+
+#[tauri::command]
+async fn profile_update(
+    id: String,
+    name: Option<String>,
+    data_root: Option<String>,
+    port: Option<u16>,
+    account_id: Option<String>,
+    zcode_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let paths = Paths::detect();
+    // 哨兵约定：port=0 表示清除端口；空字符串表示清除账号/路径绑定
+    let port_arg = port.map(|v| if v == 0 { None } else { Some(v) });
+    let account_arg = account_id.map(|a| if a.trim().is_empty() { None } else { Some(a) });
+    let zpath_arg = zcode_path.map(|a| if a.trim().is_empty() { None } else { Some(a) });
+    let p = profile::update_profile(&paths, &id, name, data_root, port_arg, account_arg, zpath_arg)?;
+    Ok(profile::profile_value(&paths, &p))
+}
+
+#[tauri::command]
+async fn profile_delete(id: String) -> Result<serde_json::Value, String> {
+    let paths = Paths::detect();
+    profile::delete_profile(&paths, &id)?;
+    Ok(json!({ "deleted": id }))
+}
+
+#[tauri::command]
+async fn profile_launch(id: String) -> Result<serde_json::Value, String> {
+    let paths = Paths::detect();
+    let p = profile::get_profile(&paths, &id)?;
+    let pid = profile::launch_profile(&paths, &p)?;
+    Ok(profile::profile_value(&paths, &p))
+        .map(|mut v| {
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("pid".into(), json!(pid));
+            }
+            v
+        })
+}
+
+#[tauri::command]
+async fn profile_kill(id: String) -> Result<serde_json::Value, String> {
+    let paths = Paths::detect();
+    let p = profile::get_profile(&paths, &id)?;
+    profile::kill_profile(&paths, &p)?;
+    Ok(profile::profile_value(&paths, &p))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1168,6 +1235,12 @@ pub fn run() {
             set_zcode_path,
             launch_zcode,
             open_external,
+            profile_list,
+            profile_create,
+            profile_update,
+            profile_delete,
+            profile_launch,
+            profile_kill,
             open_settings,
             reveal_main,
         ])

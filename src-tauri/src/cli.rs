@@ -34,12 +34,17 @@ fn ok(v: Value) -> String {
     serde_json::to_string_pretty(&Value::Object(m)).unwrap()
 }
 
+fn ok0(v: Value) -> (String, i32) {
+    (ok(v), 0)
+}
+
 fn err(e: &str) -> String {
     serde_json::to_string_pretty(&json!({ "ok": false, "error": e })).unwrap()
 }
 
 pub fn run(args: &[String]) -> (String, i32) {
     let mut lang_override: Option<crate::i18n::Lang> = None;
+    let mut profile_id: Option<String> = None;
     let args: Vec<String> = {
         let mut out = vec![];
         let mut it = args.iter();
@@ -48,13 +53,25 @@ pub fn run(args: &[String]) -> (String, i32) {
                 if let Some(l) = it.next().and_then(|v| crate::i18n::Lang::parse(v)) {
                     lang_override = Some(l);
                 }
+            } else if a == "--profile" {
+                profile_id = it.next().cloned().filter(|v| !v.trim().is_empty());
             } else {
                 out.push(a.clone());
             }
         }
         out
     };
-    let paths = Paths::detect();
+    let mut paths = Paths::detect();
+    let mut scoped_profile: Option<crate::profile::Profile> = None;
+    if let Some(pid) = profile_id.clone() {
+        match crate::profile::get_profile(&paths, &pid) {
+            Ok(p) => {
+                scoped_profile = Some(p.clone());
+                paths = crate::profile::paths_for_profile(&paths, &p);
+            }
+            Err(e) => return (err(&e), 1),
+        }
+    }
 
     if let Some(l) = lang_override {
         crate::i18n::set(l);
@@ -69,13 +86,13 @@ pub fn run(args: &[String]) -> (String, i32) {
 
     let out = match cmd.as_str() {
         "state" => match get_state(&paths) {
-            Ok(st) => ok(serde_json::to_value(st).unwrap_or(Value::Null)),
+            Ok(st) => ok0(serde_json::to_value(st).unwrap_or(Value::Null)),
             Err(e) => return (err(&e), 1),
         },
         "list" => {
             let accounts = list_accounts(&paths);
             match accounts {
-                Ok(a) => ok(json!({
+                Ok(a) => ok0(json!({
                     "accounts": a.iter().map(|x| json!({
                         "id": x.id, "name": x.name, "created_at": x.created_at,
                         "updated_at": x.updated_at, "hash": x.hash,
@@ -87,7 +104,7 @@ pub fn run(args: &[String]) -> (String, i32) {
         "capture" => {
             let name = flag(rest, "--name");
             match capture_current(&paths, name) {
-                Ok(a) => ok(json!({ "id": a.id, "name": a.name })),
+                Ok(a) => ok0(json!({ "id": a.id, "name": a.name })),
                 Err(e) => return (err(&e), 1),
             }
         }
@@ -96,7 +113,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                 return (err(&crate::i18n::tr("cli.usage.rename")), 2);
             };
             match rename_account(&paths, &id, &name) {
-                Ok(a) => ok(json!({ "id": a.id, "name": a.name })),
+                Ok(a) => ok0(json!({ "id": a.id, "name": a.name })),
                 Err(e) => return (err(&e), 1),
             }
         }
@@ -105,7 +122,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                 return (err(&crate::i18n::tr("cli.usage.delete")), 2);
             };
             match delete_account(&paths, &id) {
-                Ok(()) => ok(json!({ "deleted": id })),
+                Ok(()) => ok0(json!({ "deleted": id })),
                 Err(e) => return (err(&e), 1),
             }
         }
@@ -114,7 +131,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                 return (err(&crate::i18n::tr("cli.usage.update")), 2);
             };
             match update_account_from_live(&paths, &id) {
-                Ok(a) => ok(json!({ "id": a.id, "name": a.name, "hash": a.hash })),
+                Ok(a) => ok0(json!({ "id": a.id, "name": a.name, "hash": a.hash })),
                 Err(e) => return (err(&e), 1),
             }
         }
@@ -146,23 +163,29 @@ pub fn run(args: &[String]) -> (String, i32) {
                             eprintln!("{msg}");
                         }
                     }
-                    ok(serde_json::to_value(&r).unwrap_or(Value::Null))
+                    (ok(serde_json::to_value(&r).unwrap_or(Value::Null)), 0)
                 }
                 Err(e) => return (err(&e), 1),
             }
         }
-        "kill" => match kill_zcode() {
-            Ok(true) => ok(json!({ "killed": true })),
-            Ok(false) => return (err(&crate::i18n::tr("err.zcode.kill_timeout")), 1),
-            Err(e) => return (err(&e), 1),
-        },
+        "kill" => {
+            let res = match &scoped_profile {
+                Some(p) => crate::profile::kill_profile(&paths, p).map(|_| true),
+                None => kill_zcode(),
+            };
+            match res {
+                Ok(true) => ok0(json!({ "killed": true })),
+                Ok(false) => return (err(&crate::i18n::tr("err.zcode.kill_timeout")), 1),
+                Err(e) => return (err(&e), 1),
+            }
+        }
         "quota" => {
             let res = match flag(rest, "--id") {
                 Some(id) => account_quota(&paths, &id),
                 None => live_quota(&paths),
             };
             match res {
-                Ok(q) => ok(serde_json::to_value(&q).unwrap_or(Value::Null)),
+                Ok(q) => ok0(serde_json::to_value(&q).unwrap_or(Value::Null)),
                 Err(e) => return (err(&e), 1),
             }
         }
@@ -196,7 +219,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                     })),
                 }
             }
-            ok(json!({ "anyClaimable": any, "accounts": items }))
+            ok0(json!({ "anyClaimable": any, "accounts": items }))
         }
         "behavior" => {
             let las = flag(rest, "--launch-after-switch");
@@ -209,7 +232,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                 s.close_to_tray = Some(parse_bool(&v));
             }
             match save_settings(&paths, &s) {
-                Ok(()) => ok(json!({
+                Ok(()) => ok0(json!({
                     "launch_after_switch": s.launch_after_switch(),
                     "close_to_tray": s.close_to_tray(),
                 })),
@@ -229,7 +252,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                     match crate::cipher::seal(&payload, &password, crate::cipher::FORMAT_BUNDLE) {
                         Ok(sealed) => match serde_json::to_string_pretty(&sealed) {
                             Ok(body) => match atomic_write(std::path::Path::new(&out_path), &(body + "\n")) {
-                                Ok(()) => ok(json!({ "out": out_path, "encrypted": true })),
+                                Ok(()) => ok0(json!({ "out": out_path, "encrypted": true })),
                                 Err(e) => return (err(&crate::i18n::trf("err.write", &[("e", &e)])), 1),
                             },
                             Err(e) => return (err(&crate::i18n::trf("err.serialize", &[("e", &e.to_string())])), 1),
@@ -250,7 +273,7 @@ pub fn run(args: &[String]) -> (String, i32) {
             match list_accounts(&paths).map(|a| export_bundle_value(&a)) {
                 Ok(payload) => match crate::cipher::seal(&payload, &password, crate::cipher::FORMAT_BUNDLE) {
                     Ok(sealed) => match atomic_write(std::path::Path::new(&out_path), &(serde_json::to_string_pretty(&sealed).unwrap() + "\n")) {
-                        Ok(()) => ok(json!({ "out": out_path, "encrypted": true })),
+                        Ok(()) => ok0(json!({ "out": out_path, "encrypted": true })),
                         Err(e) => return (err(&crate::i18n::trf("err.write", &[("e", &e)])), 1),
                     },
                     Err(e) => return (err(&e), 1),
@@ -284,7 +307,7 @@ pub fn run(args: &[String]) -> (String, i32) {
                 Err(e) => return (err(&e), 1),
             };
             match import_values(&paths, &entries) {
-                Ok(rep) => ok(serde_json::to_value(&rep).unwrap_or(Value::Null)),
+                Ok(rep) => ok0(serde_json::to_value(&rep).unwrap_or(Value::Null)),
                 Err(e) => return (err(&e), 1),
             }
         }
@@ -295,21 +318,121 @@ pub fn run(args: &[String]) -> (String, i32) {
             let mut s = load_settings(&paths);
             s.zcode_path = Some(p);
             match save_settings(&paths, &s) {
-                Ok(()) => ok(json!({})),
+                Ok(()) => ok0(json!({})),
                 Err(e) => return (err(&e), 1),
             }
         }
         "launch" => {
+            if let Some(p) = &scoped_profile {
+                return match crate::profile::launch_profile(&paths, p) {
+                    Ok(pid) => (ok(json!({ "launched": p.data_root, "pid": pid })), 0),
+                    Err(e) => (err(&e), 1),
+                };
+            }
             let (p, ok_path) = effective_zcode_path(&paths);
             if !ok_path {
                 return (err(&crate::i18n::trf("err.zcode.path_invalid", &[("p", &p)])), 1);
             }
             match launch_zcode(&p) {
-                Ok(()) => ok(json!({ "launched": p })),
+                Ok(()) => (ok(json!({ "launched": p })), 0),
                 Err(e) => return (err(&e), 1),
+            }
+        }
+        "profile" => {
+            let Some(sub) = rest.first().cloned() else {
+                return (err(&crate::i18n::tr("cli.usage.profile")), 2);
+            };
+            let sub_rest = &rest[1..];
+            match sub.as_str() {
+                "list" => (ok(crate::profile::list_profiles_value(&paths)), 0),
+                "create" => {
+                    let (Some(name), Some(dr)) = (flag(sub_rest, "--name"), flag(sub_rest, "--data-root")) else {
+                        return (err(&crate::i18n::tr("cli.profile.create_usage")), 2);
+                    };
+                    let port = match flag(sub_rest, "--port") {
+                        Some(v) => match v.parse::<u16>() {
+                            Ok(n) if (1..=65535).contains(&n) => Some(n),
+                            _ => return (err(&crate::i18n::tr("cli.profile.create_usage")), 2),
+                        },
+                        None => None,
+                    };
+                    match crate::profile::create_profile(
+                        &paths,
+                        &name,
+                        &dr,
+                        port,
+                        flag(sub_rest, "--account"),
+                        flag(sub_rest, "--zcode-path"),
+                    ) {
+                        Ok(p) => (ok(crate::profile::profile_value(&paths, &p)), 0),
+                        Err(e) => return (err(&e), 1),
+                    }
+                }
+                "update" => {
+                    let Some(id) = flag(sub_rest, "--id") else {
+                        return (err(&crate::i18n::tr("cli.profile.update_usage")), 2);
+                    };
+                    let port = match flag(sub_rest, "--port") {
+                        Some(v) => match v.parse::<u16>() {
+                            Ok(0) => Some(None),
+                            Ok(n) if (1..=65535).contains(&n) => Some(Some(n)),
+                            _ => return (err(&crate::i18n::tr("cli.profile.update_usage")), 2),
+                        },
+                        None => None,
+                    };
+                    let account = flag(sub_rest, "--account").map(|a| if a.trim().is_empty() { None } else { Some(a) });
+                    let zpath = flag(sub_rest, "--zcode-path").map(|a| if a.trim().is_empty() { None } else { Some(a) });
+                    match crate::profile::update_profile(
+                        &paths,
+                        &id,
+                        flag(sub_rest, "--name"),
+                        flag(sub_rest, "--data-root"),
+                        port,
+                        account,
+                        zpath,
+                    ) {
+                        Ok(p) => (ok(crate::profile::profile_value(&paths, &p)), 0),
+                        Err(e) => return (err(&e), 1),
+                    }
+                }
+                "delete" => {
+                    let Some(id) = flag(sub_rest, "--id") else {
+                        return (err(&crate::i18n::tr("cli.profile.delete_usage")), 2);
+                    };
+                    match crate::profile::delete_profile(&paths, &id) {
+                        Ok(()) => (ok(json!({ "deleted": id })), 0),
+                        Err(e) => return (err(&e), 1),
+                    }
+                }
+                "launch" => {
+                    let Some(id) = flag(sub_rest, "--id").or_else(|| profile_id.clone()) else {
+                        return (err(&crate::i18n::tr("cli.profile.launch_usage")), 2);
+                    };
+                    match crate::profile::get_profile(&paths, &id)
+                        .and_then(|p| crate::profile::launch_profile(&paths, &p).map(|pid| (p, pid)))
+                    {
+                        Ok((p, pid)) => (ok(json!({ "launched": p.data_root, "pid": pid })), 0),
+                        Err(e) => return (err(&e), 1),
+                    }
+                }
+                "kill" => {
+                    let Some(id) = flag(sub_rest, "--id").or_else(|| profile_id.clone()) else {
+                        return (err(&crate::i18n::tr("cli.profile.kill_usage")), 2);
+                    };
+                    match crate::profile::get_profile(&paths, &id)
+                        .and_then(|p| crate::profile::kill_profile(&paths, &p).map(|_| p))
+                    {
+                        Ok(p) => (ok(json!({ "killed": true, "profile": p.id })), 0),
+                        Err(e) => return (err(&e), 1),
+                    }
+                }
+                other => (
+                    err(&crate::i18n::trf("cli.profile.unknown", &[("sub", other)])),
+                    2,
+                ),
             }
         }
         other => return (err(&crate::i18n::trf("cli.unknown_cmd", &[("cmd", other)])), 2),
     };
-    (out, 0)
+    out
 }
