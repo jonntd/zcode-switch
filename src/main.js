@@ -21,6 +21,14 @@ let acctRefreshBusy = {};
 let acctRefreshCooldown = {};
 let refreshTicker = null;
 
+// 渲染调度：lastStateSig 用于 5s 轮询的 state 签名比对（无变化不重绘）；
+// renderTimer 合并 120ms 内的多次重绘请求（scheduleRender）。
+// 集中声明在顶部：refresh()（文件前部）与轮询回调都会引用，避免远距离 let 的 TDZ 隐患。
+let lastStateSig = null;
+let renderTimer = null;
+// 轻量开关防抖：防止快速双击导致 set_behavior 开→关连发
+let lightToggleBusy = false;
+
 // 多实例 Profile：列表 + 内联新建表单状态
 let profiles = [];
 let profileFormOpen = false;
@@ -713,13 +721,24 @@ const actions = {
   },
 
   async toggleLight() {
+    if (lightToggleBusy) return;
     const next = !isLight();
+    lightToggleBusy = true;
     try {
-      // 开启轻量模式时强制关闭自动领取（后台轮询已停，自动领取没有数据来源）
-      await invoke("set_behavior", next ? { lightMode: true, autoClaim: false } : { lightMode: false });
+      // 开启轻量模式时一并关闭自动领取/活动探测/到点领取：后台活动全停，
+      // 开关保持开启会误导（设置面板显示「开」但实际不运行）；退出轻量不自动恢复，与 auto_claim 同一策略
+      await invoke("set_behavior", next
+        ? { lightMode: true, autoClaim: false, activityProbe: false, claimAtEffective: false }
+        : { lightMode: false });
+      if (next) {
+        // 双保险：清掉已在排定的探测轮次与提醒 ticker（入口已有 isLight 门控）
+        clearTimeout(probe.timer); probe.timer = null;
+        if (reminderTicker) { clearInterval(reminderTicker); reminderTicker = null; }
+      }
       await refresh();
       render();
     } catch (e) { toast(stripErr(e), "err"); }
+    finally { lightToggleBusy = false; }
   },
 };
 
@@ -1197,7 +1216,7 @@ function scheduleProbeRound(delayMs) {
 
 // 后台不探测；回到前台补探一次（随机 30–120s，避免"一回到前台就立刻发包"的规律）
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden || !state?.activity_probe || probe.running || probe.roundRunning) return;
+  if (document.hidden || isLight() || !state?.activity_probe || probe.running || probe.roundRunning) return;
   const remaining = (probe.nextAt || 0) - Date.now();
   if (remaining > 120_000 || remaining <= 0) {
     scheduleProbeRound(rand(30_000, 120_000));
@@ -1205,6 +1224,8 @@ document.addEventListener("visibilitychange", () => {
 });
 
 async function probeRound(force = false) {
+  // 轻量模式：入口门控 + 清掉已排定的下一轮，确保探测循环彻底停摆
+  if (isLight()) { clearTimeout(probe.timer); probe.timer = null; return; }
   if (!state?.activity_probe || probe.roundRunning) return;
   probe.roundRunning = true;
   try {
@@ -1317,6 +1338,7 @@ function syncReminders() {
 
 // 60s ticker 比对时间戳（不用长 setTimeout）：系统休眠/时钟跳变后也能补触发
 function checkReminders() {
+  if (isLight()) return;
   syncReminders();
   const now = Date.now();
   const due = reminders.filter((r) => r.at <= now);
@@ -1743,7 +1765,6 @@ function render() {
 
 /// 合并短时间内的多次重绘请求：后台逐账号刷新/探测/自动领取会连续触发 render，
 /// 每次都全量重建 innerHTML 会造成明显卡顿。120ms 内的多次请求合并为一次。
-let renderTimer = null;
 function scheduleRender() {
   if (renderTimer) return;
   renderTimer = setTimeout(() => {
@@ -1753,7 +1774,6 @@ function scheduleRender() {
 }
 
 /// 轻量重绘判据：5s 轮询拿到的 state 与上次一致时不重绘（JSON 签名比对）。
-let lastStateSig = null;
 function noteState(s) {
   state = s;
   lastStateSig = JSON.stringify(s);
@@ -2154,7 +2174,9 @@ listen("oauth://done", (ev) => {
 listen("tray-activity", () => { actions.openActivity(); });
 
 listen("state-changed", () => {
-  refresh().then(() => { if (!uiLocked()) render(); }).catch(() => {});
+  // set_behavior 的显式调用方（toggleAutoClaim/toggleLight 等）已自行 refresh+render，
+  // 这里只兜底其它来源的状态变更；合并渲染避免与调用方重复全量重绘
+  refresh().then(() => { if (!uiLocked()) scheduleRender(); }).catch(() => {});
 });
 
 const SWEEP_PERIOD = 5 * 60 * 1000;
@@ -2205,7 +2227,10 @@ async function sweepTick() {
     sweepTick();
     setInterval(() => {
       invoke("get_state").then((s) => {
-        // state 签名未变则跳过重绘；但刷新冷却倒计时期间仍需周期重绘（倒计时标签依赖它）
+        // 重绘判据：state 签名未变则跳过；冷却倒计时期间仍周期重绘（倒计时标签依赖它）。
+        // 注意：渲染输出还依赖其他随时间变化的模块状态（当前为 refreshClaim.cooldownUntil
+        // 与 acctRefreshCooldown），新增此类「依赖时间自动变化」的 UI 状态时，
+        // 必须同步更新下面的 cdActive 判断，否则该状态会停止刷新。
         const cdActive = refreshClaim.cooldownUntil > Date.now()
           || Object.values(acctRefreshCooldown).some((t) => t > Date.now());
         const changed = JSON.stringify(s) !== lastStateSig || cdActive;
