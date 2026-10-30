@@ -1775,19 +1775,26 @@ function renderInner() {
     }
     if (ident) meta += `${meta ? " · " : ""}${esc(ident)}`;
     const initial = (a.name.trim()[0] || "?").toUpperCase();
+    // 实例状态与账号合并：该账号绑定的 Profile 正在运行 → 行上直接给「停止」
+    const inst = profiles.find((p) => p.accountId === a.id) || null;
+    const instRunning = !!(inst && inst.running);
     return `
-    <div class="row acc-row${isActive ? " active" : ""}" data-id="${a.id}">
+    <div class="row acc-row${isActive || instRunning ? " active" : ""}" data-id="${a.id}">
       <div class="row-top">
-        <div class="acc-avatar" style="background:${notchColor(a.id)}1f;color:${notchColor(a.id)};border-color:${notchColor(a.id)}55">${esc(initial)}</div>
+        <div class="acc-avatar${instRunning ? " on" : ""}" style="${instRunning
+          ? "background:rgba(111,191,115,.12);color:#6fbf73;border-color:rgba(111,191,115,.4)"
+          : `background:${notchColor(a.id)}1f;color:${notchColor(a.id)};border-color:${notchColor(a.id)}55`}">${esc(initial)}</div>
         <div class="row-main">
-          <div class="row-name">${esc(a.name)}${tierBadgeFor(a.id)}${a.has_user_info === false ? `<span class="tag-relogin" title="${esc(t("btn.reloginTitle"))}">${t("btn.relogin")}</span>` : ""}${a.jwt_expired ? `<span class="tag-relogin" title="${esc(t("btn.jwtExpiredTitle"))}">${t("btn.jwtExpired")}</span>` : ""}</div>
+          <div class="row-name">${esc(a.name)}${tierBadgeFor(a.id)}${instRunning ? `<span class="tag-run">${t("pf.running")}</span>` : ""}${a.has_user_info === false ? `<span class="tag-relogin" title="${esc(t("btn.reloginTitle"))}">${t("btn.relogin")}</span>` : ""}${a.jwt_expired ? `<span class="tag-relogin" title="${esc(t("btn.jwtExpiredTitle"))}">${t("btn.jwtExpired")}</span>` : ""}</div>
           <div class="row-meta">${meta}</div>
         </div>
         <div class="row-actions">
           ${isActive
             ? `<span class="in-use-pill">${ic("check", 12)} ${t("btn.inUse")}</span>`
             : `<button class="btn-switch has-ic" click="actions.askSwitch('${a.id}')">${ic("swap", 14)} ${t("btn.switch")}</button>`}
-          <button class="icon-btn" title="${t("pf.rowLaunchTitle")}" aria-label="${t("pf.rowLaunchTitle")}" click="actions.launchForAccount('${a.id}')">${ic("play", 16)}</button>
+          ${instRunning
+            ? `<button class="btn-ghost has-ic" title="${t("pf.stopTitle")}" click="actions.profileKill('${esc(inst.id)}')">${ic("power", 13)} ${t("pf.stop")}</button>`
+            : `<button class="icon-btn" title="${t("pf.rowLaunchTitle")}" aria-label="${t("pf.rowLaunchTitle")}" click="actions.launchForAccount('${a.id}')">${ic("play", 16)}</button>`}
           <button class="icon-btn${rowMenuFor === a.id ? " open" : ""}" title="${t("pf.more")}" aria-label="${t("pf.more")}" click="actions.toggleRowMenu('${a.id}')">${ic("more", 16)}</button>
         </div>
       </div>
@@ -1804,6 +1811,41 @@ function renderInner() {
     </div>`;
   }).join("");
 
+  // 无账号绑定的自定义实例：追加在列表尾部（有才显示）
+  const customProfiles = profiles.filter((p) => !p.accountId);
+  const customForm = profileFormHtml();
+  const customHtml = (customProfiles.length || profileFormOpen) ? `
+    <div class="cust-div">
+      <span>${t("pf.custom")}</span>
+      <button class="btn-ghost has-ic" click="actions.profileToggleForm()">${ic("userPlus", 12)} ${t("pf.add")}</button>
+    </div>
+    ${customForm}
+    ${customProfiles.map((p) => {
+      const running = !!p.running;
+      const initial = (p.name.trim()[0] || "?").toUpperCase();
+      const meta = [p.dataRoot, p.port ? `${t("pf.port")}: ${p.port}` : ""]
+        .filter(Boolean).map((x) => esc(x)).join(" · ");
+      return `
+      <div class="row acc-row${running ? " active" : ""}" data-id="${esc(p.id)}">
+        <div class="row-top">
+          <div class="acc-avatar${running ? " on" : ""}" style="${running
+            ? "background:rgba(111,191,115,.12);color:#6fbf73;border-color:rgba(111,191,115,.4)"
+            : ""}">${esc(initial)}</div>
+          <div class="row-main">
+            <div class="row-name">${esc(p.name)}${running ? `<span class="tag-run">${t("pf.running")}</span>` : ""}</div>
+            <div class="row-meta">${meta}</div>
+          </div>
+          <div class="row-actions">
+            ${running
+              ? `<button class="btn-ghost has-ic" click="actions.profileKill('${esc(p.id)}')">${ic("power", 13)} ${t("pf.stop")}</button>`
+              : `<button class="btn-switch has-ic" click="actions.profileLaunch('${esc(p.id)}')">${ic("play", 14)} ${t("pf.launch")}</button>`}
+            <button class="icon-btn danger" title="${t("btn.delete")}" click="actions.profileDelete('${esc(p.id)}')">${ic("x", 16)}</button>
+          </div>
+        </div>
+      </div>`;
+    }).join("")}
+  ` : "";
+
   const listHtml = s.accounts.length === 0
     ? `<div class="empty">
          <div class="glyph">${ic("empty", 34)}</div>
@@ -1817,28 +1859,32 @@ function renderInner() {
   $app.innerHTML = `
     <header class="topbar">
       <div class="wordmark">Z·SWITCH${appVer ? ` <span class="ver">v${esc(appVer)}</span>` : ""}</div>
-      <div class="top-status${unsaved ? " unsaved" : ""}">
-        <span class="status-dot ${dotCls}"></span>
-        <span class="status-text">${esc(statusText)}</span>
+      <div class="top-right">
+        <div class="top-status${unsaved ? " unsaved" : ""}">
+          <span class="status-dot ${dotCls}"></span>
+          <span class="status-text">${esc(statusText)}</span>
+        </div>
+        <button class="icon-btn tb-gear" click="actions.openSettings()" aria-label="${t("common.settings")}" title="${t("common.settings")}">${ic("sliders", 15)}</button>
       </div>
     </header>
 
     <section class="toolbar">
       <button class="btn-primary has-ic${unsaved ? " attention" : ""}" click="actions.capture()" ${!s.live_logged_in || active ? "disabled" : ""}
         title="${active ? esc(t("m.saveLoginDisabledTitle", { name: active.name })) : ""}">
-        ${ic("capture", 16)} ${t("btn.saveLogin")}
+        ${ic("capture", 14)} ${t("btn.saveLogin")}
       </button>
+      <button class="btn-ghost has-ic" click="actions.addAccount()" title="${t("btn.addAccountTitle")}">${ic("userPlus", 14)} ${t("btn.addAccount")}</button>
       ${claimableCount > 0
         ? `<button class="btn-ghost has-ic claim-all" click="actions.claimAll()" ${claimAllRunning || refreshClaim.running || autoClaimRunning ? "disabled" : ""}
-            title="${t("btn.claimAllTitle")}">${ic("gift", 16)} ${t("btn.claimAll")}${claimableCount > 1 ? ` (${claimableCount})` : ""}</button>`
+            title="${t("btn.claimAllTitle")}">${ic("gift", 14)} ${t("btn.claimAll")}${claimableCount > 1 ? ` (${claimableCount})` : ""}</button>`
         : ""}
       ${(s.accounts.length > 0)
         ? `<button class="btn-ghost has-ic${refreshTopOff ? " is-off" : ""}" click="actions.refreshClaim()"
-            title="${esc(refreshTopTitle)}">${ic("refresh", 16)} <span id="refresh-claim-label">${esc(refreshTopLabel)}</span></button>`
+            title="${esc(refreshTopTitle)}">${ic("refresh", 14)} <span id="refresh-claim-label">${esc(refreshTopLabel)}</span></button>`
         : ""}
       <button class="btn-ghost has-ic${actCount ? "" : " is-off"}" click="actions.openActivity()"
         title="${esc(actBtnTitle)}">
-        ${ic("gift", 16)} ${esc(t("btn.activity"))}${actCount ? ` (${actCount})` : ""}
+        ${ic("gift", 14)} ${esc(t("btn.activity"))}${actCount ? ` (${actCount})` : ""}
       </button>
       <button class="tog-inline${s.auto_claim ? " on" : ""}${autoClaimRunning ? " running" : ""}"
         role="switch" aria-checked="${s.auto_claim}" aria-label="${t("btn.autoClaim")}"
@@ -1847,85 +1893,35 @@ function renderInner() {
         <span class="toggle${s.auto_claim ? " on" : ""}" aria-hidden="true"><span class="knob"></span></span>
         ${t("btn.autoClaim")}
       </button>
-      <button class="btn-ghost has-ic" click="actions.addAccount()" title="${t("btn.addAccountTitle")}">${ic("userPlus", 16)} ${t("btn.addAccount")}</button>
       ${s.zcode_running
-        ? `<button class="btn-ghost has-ic" click="actions.askKill()" title="${t("btn.killZcode")}">${ic("power", 16)} ${t("btn.killZcode")}</button>`
-        : `<button class="btn-ghost has-ic" click="actions.launch()" ${s.zcode_path_ok ? "" : "disabled"}>${ic("play", 14)} ${t("btn.launchZcode")}</button>`}
-      <span class="tb-spacer"></span>
-      <button class="btn-ghost tb-gear has-ic" click="actions.openSettings()" aria-label="${t("common.settings")}" title="${t("common.settings")}">${ic("sliders", 16)}</button>
+        ? `<button class="btn-ghost has-ic" click="actions.askKill()" title="${t("btn.killZcode")}">${ic("power", 14)} ${t("btn.killZcode")}</button>`
+        : `<button class="btn-ghost has-ic" click="actions.launch()" ${s.zcode_path_ok ? "" : "disabled"}>${ic("play", 13)} ${t("btn.launchZcode")}</button>`}
     </section>
-
-    <div class="section-head">
-      <h2>${t("m.accounts")}</h2>
-      <span class="count">${t("m.count", { count: s.accounts.length })}</span>
-    </div>
-
-    <main class="list">${listHtml}</main>
-
-    ${renderProfilesHtml()}
+    <main class="list">${listHtml}${customHtml}</main>
   `;
   restoreScroll(scrollCap);
 }
 
-function renderProfilesHtml() {
-  const runningCount = profiles.filter((p) => p.running).length;
-  const rows = profiles.map((p) => {
-    const running = !!p.running;
-    const initial = (p.name.trim()[0] || "?").toUpperCase();
-    const meta = [p.dataRoot, p.port ? `${t("pf.port")}: ${p.port}` : "", p.accountName || ""]
-      .filter(Boolean).map((x) => esc(x)).join(" · ");
-    return `
-    <div class="row acc-row${running ? " active" : ""}" data-id="${esc(p.id)}">
-      <div class="row-top">
-        <div class="acc-avatar${running ? " on" : ""}" style="${running
-          ? "background:rgba(111,191,115,.12);color:#6fbf73;border-color:rgba(111,191,115,.4)"
-          : ""}">${esc(initial)}</div>
-        <div class="row-main">
-          <div class="row-name">${esc(p.name)}${running ? `<span class="tag-use">${t("pf.running")}</span>` : ""}${p.pid ? `<span class="row-meta">PID ${p.pid}</span>` : ""}</div>
-          <div class="row-meta">${meta}</div>
-        </div>
-        <div class="row-actions">
-          ${running
-            ? `<button class="btn-ghost has-ic" click="actions.profileKill('${esc(p.id)}')">${ic("power", 14)} ${t("pf.stop")}</button>`
-            : `<button class="btn-switch has-ic" click="actions.profileLaunch('${esc(p.id)}')">${ic("play", 14)} ${t("pf.launch")}</button>`}
-          <button class="icon-btn danger" title="${t("btn.delete")}" click="actions.profileDelete('${esc(p.id)}')">${ic("x", 16)}</button>
-        </div>
-      </div>
-    </div>`;
-  }).join("");
-
-  const form = profileFormOpen ? `
-    <div class="row pf-form">
-      <div class="row-main">
-        <input id="pf-name" class="rename-input" placeholder="${esc(t("pf.formName"))}" maxlength="40">
-        <div class="pf-form-row">
-          <input id="pf-root" class="rename-input" placeholder="${esc(t("pf.formRoot"))}" spellcheck="false">
-        </div>
-        <div class="pf-form-row">
-          <input id="pf-port" class="rename-input pf-port" placeholder="${esc(t("pf.formPort"))}" inputmode="numeric" maxlength="5">
-          <span class="row-meta">${esc(t("pf.formHint"))}</span>
-        </div>
-        <div class="row-actions" style="margin-top:8px">
-          <button class="btn-primary" style="padding:4px 12px" click="actions.profileCreate()">${t("common.save")}</button>
-          <button class="btn-ghost" style="padding:4px 10px" click="actions.profileToggleForm()">${t("common.cancel")}</button>
-        </div>
-      </div>
-    </div>` : "";
-
-  // 空状态收敛为一行：主路径是账号行 ▶ 一键启动，这里只做管理入口
-  const body = profileFormOpen
-    ? form
-    : profiles.length === 0
-      ? `<div class="pf-empty-line">${esc(t("pf.emptyShort"))}</div>`
-      : rows;
-
+/// 自定义实例（无账号绑定）的新建表单
+function profileFormHtml() {
+  if (!profileFormOpen) return "";
   return `
-    <div class="section-head pf-head" title="${esc(t("pf.hint"))}">
-      <h2>${t("pf.title")}</h2>
-      <span class="count">${runningCount > 0 ? t("pf.runningCount", { n: runningCount }) : t("m.count", { count: profiles.length })}</span>
-      <button class="btn-ghost has-ic pf-add" click="actions.profileToggleForm()">${ic("userPlus", 14)} ${t("pf.add")}</button>
+  <div class="row pf-form">
+    <div class="row-main">
+      <input id="pf-name" class="rename-input" placeholder="${esc(t("pf.formName"))}" maxlength="40">
+      <div class="pf-form-row">
+        <input id="pf-root" class="rename-input" placeholder="${esc(t("pf.formRoot"))}" spellcheck="false">
+      </div>
+      <div class="pf-form-row">
+        <input id="pf-port" class="rename-input pf-port" placeholder="${esc(t("pf.formPort"))}" inputmode="numeric" maxlength="5">
+        <span class="row-meta">${esc(t("pf.formHint"))}</span>
+      </div>
+      <div class="row-actions" style="margin-top:8px">
+        <button class="btn-primary" style="padding:4px 12px" click="actions.profileCreate()">${t("common.save")}</button>
+        <button class="btn-ghost" style="padding:4px 10px" click="actions.profileToggleForm()">${t("common.cancel")}</button>
+      </div>
     </div>
-    <div class="pf-body">${body}</div>`;
+  </div>`;
 }
 
 async function reloadProfiles() {

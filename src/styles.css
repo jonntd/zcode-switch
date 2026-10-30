@@ -1301,3 +1301,28 @@ input:focus-visible,
 .q-chip.warn { border-color: rgba(232, 163, 61, .4); color: var(--amber, #e8a33d); background: rgba(232, 163, 61, .06); }
 .q-chip.danger { border-color: rgba(224, 82, 82, .4); color: var(--red, #e05252); background: rgba(224, 82, 82, .07); }
 .q-chip.more { border-color: var(--hairline-soft, #2c2f36); color: var(--ink-mute, #7c8089); background: none; }
+
+/* ===== 账号-实例合并列表 ===== */
+.tag-run {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--mint, #6fbf73);
+  border: 1px solid rgba(111, 191, 115, .4);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex: none;
+}
+.cust-div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--hairline-soft, #2c2f36);
+  color: var(--ink-mute, #7c8089);
+  font-size: 11px;
+  letter-spacing: .08em;
+}
+.cust-div span { flex: 1; }
+.cust-div .btn-ghost { font-size: 11px; padding: 2px 8px; }

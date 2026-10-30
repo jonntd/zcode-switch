@@ -275,5 +275,8 @@ export const zh = {
   "pf.deleteBody": "将移除该实例的档案记录（数据目录 {root} 中的文件不会被删除）。删除前请先停止实例。",
   "pf.rowLaunchTitle": "用独立实例启动该账号",
   "pf.more": "更多操作",
+  "pf.custom": "自定义实例",
+  "pf.stopTitle": "停止该账号的独立实例",
+  "pf.more": "更多操作",
   "pf.alreadyRunning": "实例「{name}」已在运行",
 };
