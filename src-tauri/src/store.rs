@@ -1304,6 +1304,33 @@ pub fn seed_profile_account(
         rematerialize_wiped_builtins(profile_paths, &acc);
     }
     reset_live_plan_cache(profile_paths);
+    // Bootstrap settings 准备：ZCode 的 settingService 固定读
+    // <ZCODE_DESKTOP_HOME_DIR|HOME>/.zcode/v2/setting.json（不跟随 ZCODE_DATA_BASE_DIR）。
+    // 实例启动以 ZCODE_DESKTOP_HOME_DIR=<root> 注入，这里先备好实例自己的 setting.json：
+    // 从主 setting.json 复制初始偏好，dataBaseDir 显式指向实例 root；
+    // 移除 webRemoteControlRelayV2Device（与主实例共 deviceSid 会互踢）；
+    // family domain 随后由 align_family_domain 按账号修正
+    let inst_setting = profile_paths.live_setting();
+    if !inst_setting.exists() {
+        let mut base: Value = fs::read_to_string(main_paths.live_setting())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| json!({}));
+        if !base.is_object() {
+            base = json!({});
+        }
+        if let Some(obj) = base.as_object_mut() {
+            obj.insert(
+                "dataBaseDir".into(),
+                json!(profile_paths.data_root.to_string_lossy().to_string()),
+            );
+            obj.remove("webRemoteControlRelayV2Device");
+        }
+        if let Some(dir) = inst_setting.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let _ = atomic_write(&inst_setting, &(serde_json::to_string_pretty(&base).unwrap_or_default() + "\n"));
+    }
     align_family_domain(profile_paths, &acc);
     let mid = ensure_virtual_device_mid_locked(main_paths, account_id)?;
     write_live_device_mid(profile_paths, &mid)?;

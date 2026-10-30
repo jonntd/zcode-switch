@@ -331,6 +331,12 @@ pub fn launch_profile(paths: &Paths, p: &Profile) -> Result<u32, String> {
     let mut cmd = detached(no_window(&bin));
     // ZCode 的数据根重定向入口；若客户端 home 的 setting.json 含 dataBaseDir，优先级以客户端实现为准
     cmd.env("ZCODE_DATA_BASE_DIR", &root);
+    // settingService（bootstrap settings：family domain / 连接选择等账号级 UI 状态）
+    // 固定读 <ZCODE_DESKTOP_HOME_DIR|HOME>/.zcode/v2/setting.json，不跟随 ZCODE_DATA_BASE_DIR；
+    // 不注入则实例会读到主实例的 setting.json（familyDomain=主账号），导致实例 UI
+    // 按错误的 family 判定登录态/套餐（Start Plan 显示「登录后查看」）。
+    // 注意：只改这个 env 不改 HOME，os.homedir() 不变 → 凭据回退密钥不受影响
+    cmd.env("ZCODE_DESKTOP_HOME_DIR", &root);
     // Electron userData 隔离：SingletonLock、rum-electron-store(_arms_uid)、会话数据随实例独立
     // （app.asar 证实：userData = ZCODE_DESKTOP_USER_DATA_DIR ?? appData/<应用名>）
     let user_data = root.join("user-data");
