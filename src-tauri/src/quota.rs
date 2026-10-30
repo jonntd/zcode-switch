@@ -289,6 +289,9 @@ pub struct QuotaItem {
 pub struct PlanSlot {
     #[serde(skip_serializing)]
     pub pid: String,
+    /// 归属用户标识（user_plan_id）：不同用户的同名套餐绝不能在合并时互相覆盖
+    #[serde(skip_serializing)]
+    pub user_plan: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -664,6 +667,18 @@ pub(crate) fn pick_channels(creds: &Value, config: Option<&Value>, secret: &str,
                 creds.get("oauth:active_provider").and_then(|v| v.as_str()),
                 secret,
             );
+            // 只认与本账号 active provider 同家族的 start-plan 条目：
+            // config 快照里可能残留其他家族的 start-plan apiKey（如 zai 账号带着
+            // builtin:bigmodel-start-plan 的 key），用它调 billing 查到的是
+            // 另一个 user 的池，合并后表现为「自己的额度显示成别人的用量」
+            let family_ok = if id.starts_with("builtin:zai") {
+                active.as_deref() != Some("bigmodel")
+            } else {
+                active.as_deref() == Some("bigmodel")
+            };
+            if !family_ok {
+                continue;
+            }
             let use_jwt = if id.starts_with("builtin:zai") {
                 jwt.is_some()
             } else {
@@ -800,10 +815,24 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
                     && t.expire == s.expire
                     && !t.items.is_empty()
                     && !s.items.is_empty()
+                    // 不同 user 的同名套餐（user_plan 都已知且不同）绝不合并：
+                    // 合并会让 A 的用量覆盖 B 的真值
+                    && (t.user_plan.is_none()
+                        || s.user_plan.is_none()
+                        || t.user_plan == s.user_plan)
             });
             match dup {
                 Some(i) => {
-                    if p.refreshed_at >= slot_ts[i] {
+                    if slots[i].user_plan.is_some() && s.user_plan.is_none() {
+                        // billing（有明确 user）已占位：家族级源（monitor，无 user）只准
+                        // 追加缺失的窗口条目，绝不能覆盖池数值——monitor 的百分比
+                        // 是窗口/时间进度语义，覆盖会把别人或进度当成自己的用量
+                        for it in &s.items {
+                            if !slots[i].items.iter().any(|x| x.name == it.name) {
+                                slots[i].items.push(it.clone());
+                            }
+                        }
+                    } else if p.refreshed_at >= slot_ts[i] {
                         slots[i] = s.clone();
                         slot_ts[i] = p.refreshed_at;
                     }
@@ -1025,6 +1054,9 @@ fn tier_from_level(level: &str) -> String {
 }
 
 fn normalize_quota_limit(limit_resp: &Value, sub_resp: Option<&Value>) -> QuotaOverview {
+    if std::env::var("ZSW_DUMP_QUOTA").is_ok() {
+        eprintln!("[zsw] quota/limit raw: {limit_resp}");
+    }
     let data = limit_resp.get("data").cloned().unwrap_or(Value::Null);
     let limits = data.get("limits").and_then(|l| l.as_array()).cloned().unwrap_or_default();
 
@@ -1110,6 +1142,7 @@ fn normalize_quota_limit(limit_resp: &Value, sub_resp: Option<&Value>) -> QuotaO
     let plans = if plan_tier.is_some() || !items.is_empty() {
         vec![PlanSlot {
             pid: String::new(),
+            user_plan: None,
             tier: plan_tier.clone(),
             tier_code: plan_tier.as_deref().map(tier_code_from_display),
             name: product_name,
@@ -1321,6 +1354,11 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
                     let (tier, tier_code) = plan_tier_from_id(&pid, pname.as_deref());
                     PlanSlot {
                         pid: pid.clone(),
+                        user_plan: pl
+                            .get("user_plan_id")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.trim().is_empty())
+                            .map(str::to_string),
                         tier: Some(tier),
                         tier_code: Some(tier_code),
                         name: Some(pname.filter(|s| !s.trim().is_empty()).unwrap_or(pid)),
