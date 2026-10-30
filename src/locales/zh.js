@@ -254,7 +254,8 @@ export const zh = {
 
   "pf.title": "多实例",
   "pf.add": "新建实例",
-  "pf.empty": "还没有多开实例。新建一个实例，用独立的数据目录和账号同时运行多个 ZCode。",
+  "pf.emptyShort": "暂无实例 — 点击账号行的 ▶ 可一键启动独立实例，或在「新建实例」里手动创建",
+  "pf.runningCount": "{n} 个运行中",
   "pf.hint": "每个实例使用独立的数据目录与登录身份，可同时运行多个 ZCode。一个账号只能绑定一个实例。",
   "pf.launch": "启动",
   "pf.stop": "停止",

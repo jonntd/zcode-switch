@@ -1832,6 +1832,7 @@ function renderInner() {
 }
 
 function renderProfilesHtml() {
+  const runningCount = profiles.filter((p) => p.running).length;
   const rows = profiles.map((p) => {
     const running = !!p.running;
     const meta = [p.dataRoot, p.port ? `${t("pf.port")}: ${p.port}` : "", p.accountName || ""]
@@ -1872,19 +1873,20 @@ function renderProfilesHtml() {
       </div>
     </div>` : "";
 
+  // 空状态收敛为一行：主路径是账号行 ▶ 一键启动，这里只做管理入口
+  const body = profileFormOpen
+    ? form
+    : profiles.length === 0
+      ? `<div class="pf-empty-line">${esc(t("pf.emptyShort"))}</div>`
+      : rows;
+
   return `
-    <div class="section-head pf-head">
+    <div class="section-head pf-head" title="${esc(t("pf.hint"))}">
       <h2>${t("pf.title")}</h2>
-      <span class="count">${t("m.count", { count: profiles.length })}</span>
+      <span class="count">${runningCount > 0 ? t("pf.runningCount", { n: runningCount }) : t("m.count", { count: profiles.length })}</span>
       <button class="btn-ghost has-ic pf-add" click="actions.profileToggleForm()">${ic("userPlus", 14)} ${t("pf.add")}</button>
     </div>
-    <main class="list pf-list">
-      ${form}
-      ${profiles.length === 0 && !profileFormOpen
-        ? `<div class="empty pf-empty"><div class="glyph">${ic("empty", 28)}</div>${t("pf.empty")}</div>`
-        : rows}
-    </main>
-    <div class="pf-hint">${esc(t("pf.hint"))}</div>`;
+    <div class="pf-body">${body}</div>`;
 }
 
 async function reloadProfiles() {

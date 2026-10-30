@@ -254,7 +254,8 @@ export const en = {
 
   "pf.title": "Instances",
   "pf.add": "New instance",
-  "pf.empty": "No instances yet. Create one to run multiple ZCode apps side by side with isolated data directories and accounts.",
+  "pf.emptyShort": "No instances yet — click ▶ on an account row to launch one instantly, or create one manually",
+  "pf.runningCount": "{n} running",
   "pf.hint": "Each instance runs with its own data directory and login. One account can only be bound to one instance.",
   "pf.launch": "Launch",
   "pf.stop": "Stop",
