@@ -1848,9 +1848,15 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     let paths = Paths::detect();
-                    if store::load_settings(&paths).close_to_tray() {
+                    let s = store::load_settings(&paths);
+                    // 最小化到托盘：显式开关，或轻量模式（关窗即托盘驻留 + 前端清缓存）
+                    if s.close_to_tray() || s.light_mode() {
                         api.prevent_close();
                         let _ = window.hide();
+                        if s.light_mode() {
+                            // 通知前端释放内存缓存（活动/配额/可领等大对象）
+                            let _ = window.emit("light-sleep", ());
+                        }
                     }
                 }
                 if window.label() == "captcha" {

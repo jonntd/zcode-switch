@@ -151,7 +151,7 @@ export const en = {
   "btn.autoClaim": "Auto claim",
   "btn.autoClaimTitle": "When on, checks claimable plans every 10 min and claims automatically (activates eligibility once per account first; captcha solved silently, alerts if manual verification needed)",
   "btn.light": "Light",
-  "btn.lightTitle": "Light mode: disables background quota polling, activity probing, auto claim and reminders; also turns off the auto claim / probe / effective-claim switches (re-enable them after leaving Light mode); usage shows last manual refresh",
+  "btn.lightTitle": "Light mode: disables background quota polling, activity probing, auto claim and reminders; also turns off the auto claim / probe / effective-claim switches (re-enable them after leaving Light mode); closing the window minimizes to tray and clears memory caches — data refreshes on demand when reopened",
   "btn.claim": "Claim",
   "btn.acctRefreshTitle": "Refresh this account's event eligibility and claimable plans (rate-limited)",
   "btn.refreshClaim": "Refresh",

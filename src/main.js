@@ -2179,6 +2179,28 @@ listen("state-changed", () => {
   refresh().then(() => { if (!uiLocked()) scheduleRender(); }).catch(() => {});
 });
 
+// 轻量模式关窗 → 托盘驻留：释放内存缓存（大对象：活动/配额/可领/已领），
+// 已见活动去重存于 localStorage，恢复后不会重复弹窗；窗口重新显示时按需重拉
+let lightSleeping = false;
+listen("light-sleep", () => {
+  acctQuota = {};
+  claimable = {};
+  claimedState = {};
+  activities = {};
+  quotaOpen = {};
+  lightSleeping = true;
+});
+
+// 从托盘/最小化恢复：轻量模式下缓存已被 light-sleep 清空，这里按需重拉一次数据。
+// visibilitychange 与 focus 双保险——macOS 隐藏窗口时 visibilitychange 不一定触发。
+function lightWakeRefresh() {
+  if (!lightSleeping) return;
+  lightSleeping = false;
+  refresh().then(() => { if (!uiLocked()) scheduleRender(); }).catch(() => {});
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) lightWakeRefresh(); });
+window.addEventListener("focus", lightWakeRefresh);
+
 const SWEEP_PERIOD = 5 * 60 * 1000;
 const SWEEP_JITTER = 0.2;
 const TICK_MS = 8000;
