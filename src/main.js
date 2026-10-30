@@ -1611,32 +1611,41 @@ function claimedStripHtml(id) {
   return html;
 }
 
-/// 行内额度小色签：每个用量窗口一枚，`标签 百分比%`，颜色按余量分级。
+/// 行内额度小色签：用量窗口 + 余额池（GLM 模型池按名称去重取最大额度），
+/// `标签 百分比%`，颜色按余量分级。悬停显示 剩余/总额 与重置时间。
 function quotaChipsHtml(id) {
   const q = acctQuota[id];
   if (!q?.data) return "";
   const plans = q.data.plans || [];
-  let wins = [];
-  if (plans.length) {
-    for (const p of plans) {
-      for (const it of p.items || []) {
-        if (itemKind(it) === "prompt_count") wins.push({ it, tier: p.tier });
+  const wins = [];
+  const pools = new Map();
+  const collect = (items) => {
+    for (const it of items || []) {
+      if (it.percent_used == null) continue;
+      if (itemKind(it) !== "raw") {
+        wins.push({ it, label: windowLabel(it) });
+      } else {
+        const cur = pools.get(it.name);
+        if (!cur || (it.total || 0) > (cur.total || 0)) pools.set(it.name, it);
       }
     }
-  } else {
-    for (const it of q.data.items || []) {
-      if (itemKind(it) === "prompt_count") wins.push({ it });
-    }
-  }
-  if (!wins.length) return "";
-  const chip = ({ it, tier }) => {
+  };
+  if (plans.length) for (const p of plans) collect(p.items);
+  else collect(q.data.items);
+  const poolItems = [...pools.values()]
+    .sort((a, b) => (b.total || 0) - (a.total || 0))
+    .map((it) => ({ it, label: it.name.replace(/^GLM-?/i, "") }));
+  const list = [...wins, ...poolItems];
+  if (!list.length) return "";
+  const chip = ({ it, label }) => {
     const pct = Math.round(it.percent_used ?? 0);
     const cls = pct >= 99 ? " danger" : pct >= 80 ? " warn" : "";
-    const rem = it.total != null && it.remaining != null ? ` · ${fmtTokens(it.remaining)}/${fmtTokens(it.total)}` : "";
-    const title = `${windowLabel(it)}${rem} · ${resetLabel(it)}`;
-    return `<span class="q-chip${cls}" title="${esc(title)}">${esc(windowLabel(it))} <b>${pct}%</b></span>`;
+    const parts = [label];
+    if (it.total != null && it.remaining != null) parts.push(`${fmtTokens(it.remaining)}/${fmtTokens(it.total)}`);
+    if (it.reset || it.period_end) parts.push(resetLabel(it));
+    return `<span class="q-chip${cls}" title="${esc(parts.join(" · "))}">${esc(label)} <b>${pct}%</b></span>`;
   };
-  return `<div class="q-chips">${wins.slice(0, 4).map(chip).join("")}${wins.length > 4 ? `<span class="q-chip more">+${wins.length - 4}</span>` : ""}</div>`;
+  return `<div class="q-chips">${list.slice(0, 4).map(chip).join("")}${list.length > 4 ? `<span class="q-chip more">+${list.length - 4}</span>` : ""}</div>`;
 }
 
 function acctQuotaSlot(id) {
