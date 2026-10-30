@@ -166,12 +166,30 @@ pub fn rebuild_tray(app: &AppHandle) {
 }
 
 fn show_main(app: &AppHandle) {
+    dock_regular(app);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
 }
+
+/// 托盘驻留辅助：隐藏窗口时在 macOS 上同步把 Dock 图标一并隐藏（Accessory 模式），
+/// 否则 Dock 上仍显示「运行中」圆点，与最小化语义不符。
+#[cfg(target_os = "macos")]
+fn dock_accessory(app: &AppHandle) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+#[cfg(not(target_os = "macos"))]
+fn dock_accessory(_app: &AppHandle) {}
+
+/// 恢复窗口显示：切回常规应用模式（Dock 图标重现）
+#[cfg(target_os = "macos")]
+fn dock_regular(app: &AppHandle) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+}
+#[cfg(not(target_os = "macos"))]
+fn dock_regular(_app: &AppHandle) {}
 
 fn run_tray_action(app: AppHandle, action: String) {
     std::thread::spawn(move || {
@@ -1464,6 +1482,7 @@ async fn set_language(app: AppHandle, lang: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn reveal_main(app: AppHandle) -> Result<(), String> {
+    dock_regular(&app);
     let win = app.get_webview_window("main").ok_or_else(|| i18n::tr("err.main.missing"))?;
     win.show().map_err(|e| e.to_string())?;
     let _ = win.set_focus();
@@ -1853,6 +1872,7 @@ pub fn run() {
                     if s.close_to_tray() || s.light_mode() {
                         api.prevent_close();
                         let _ = window.hide();
+                        dock_accessory(window.app_handle());
                         if s.light_mode() {
                             // 通知前端释放内存缓存（活动/配额/可领等大对象）
                             let _ = window.emit("light-sleep", ());
