@@ -21,6 +21,10 @@ let acctRefreshBusy = {};
 let acctRefreshCooldown = {};
 let refreshTicker = null;
 
+// 多实例 Profile：列表 + 内联新建表单状态
+let profiles = [];
+let profileFormOpen = false;
+
 // 活动中心：已探测到的活动（accountId -> ClaimPlan[]，含 campaign 元数据）
 let activities = {};
 const KNOWN_KEY = "zsw-activity-known";
@@ -232,6 +236,9 @@ function idLabel(id) {
 async function refresh() {
   state = await invoke("get_state");
   if (state?.language) init(state.language);
+  try {
+    profiles = (await invoke("profile_list"))?.profiles || [];
+  } catch { /* profile 功能不可用时静默降级 */ }
   maybeStartProbe();
   startReminderTicker();
 }
@@ -1817,9 +1824,128 @@ function renderInner() {
     </div>
 
     <main class="list">${listHtml}</main>
+
+    ${renderProfilesHtml()}
   `;
   restoreScroll(scrollCap);
 }
+
+function renderProfilesHtml() {
+  const rows = profiles.map((p) => {
+    const running = !!p.running;
+    const meta = [p.dataRoot, p.port ? `${t("pf.port")}: ${p.port}` : "", p.accountName || ""]
+      .filter(Boolean).map((x) => esc(x)).join(" · ");
+    return `
+    <div class="row pf-row${running ? " active" : ""}" data-id="${esc(p.id)}">
+      <div class="row-top">
+        <span class="status-dot ${running ? "run" : "off"}" title="${running ? t("pf.running") : t("pf.stopped")}"></span>
+        <div class="row-main">
+          <div class="row-name">${esc(p.name)}${running ? `<span class="tag-use">${t("pf.running")}</span>` : ""}${p.pid ? `<span class="row-meta">PID ${p.pid}</span>` : ""}</div>
+          <div class="row-meta">${meta}</div>
+        </div>
+        <div class="row-actions">
+          ${running
+            ? `<button class="btn-ghost has-ic" click="actions.profileKill('${esc(p.id)}')">${ic("power", 14)} ${t("pf.stop")}</button>`
+            : `<button class="btn-switch has-ic" click="actions.profileLaunch('${esc(p.id)}')">${ic("play", 14)} ${t("pf.launch")}</button>`}
+          <button class="icon-btn danger" title="${t("btn.delete")}" click="actions.profileDelete('${esc(p.id)}')">${ic("x", 16)}</button>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  const form = profileFormOpen ? `
+    <div class="row pf-form">
+      <div class="row-main">
+        <input id="pf-name" class="rename-input" placeholder="${esc(t("pf.formName"))}" maxlength="40">
+        <div class="pf-form-row">
+          <input id="pf-root" class="rename-input" placeholder="${esc(t("pf.formRoot"))}" spellcheck="false">
+        </div>
+        <div class="pf-form-row">
+          <input id="pf-port" class="rename-input pf-port" placeholder="${esc(t("pf.formPort"))}" inputmode="numeric" maxlength="5">
+          <span class="row-meta">${esc(t("pf.formHint"))}</span>
+        </div>
+        <div class="row-actions" style="margin-top:8px">
+          <button class="btn-primary" style="padding:4px 12px" click="actions.profileCreate()">${t("common.save")}</button>
+          <button class="btn-ghost" style="padding:4px 10px" click="actions.profileToggleForm()">${t("common.cancel")}</button>
+        </div>
+      </div>
+    </div>` : "";
+
+  return `
+    <div class="section-head pf-head">
+      <h2>${t("pf.title")}</h2>
+      <span class="count">${t("m.count", { count: profiles.length })}</span>
+      <button class="btn-ghost has-ic pf-add" click="actions.profileToggleForm()">${ic("userPlus", 14)} ${t("pf.add")}</button>
+    </div>
+    <main class="list pf-list">
+      ${form}
+      ${profiles.length === 0 && !profileFormOpen
+        ? `<div class="empty pf-empty"><div class="glyph">${ic("empty", 28)}</div>${t("pf.empty")}</div>`
+        : rows}
+    </main>
+    <div class="pf-hint">${esc(t("pf.hint"))}</div>`;
+}
+
+async function reloadProfiles() {
+  try {
+    profiles = (await invoke("profile_list"))?.profiles || [];
+  } catch { /* ignore */ }
+  if (!uiLocked()) render();
+}
+
+Object.assign(actions, {
+  profileToggleForm() {
+    profileFormOpen = !profileFormOpen;
+    render();
+  },
+  async profileCreate() {
+    const name = $app.querySelector("#pf-name")?.value?.trim() || "";
+    const dataRoot = $app.querySelector("#pf-root")?.value?.trim() || "";
+    const portRaw = $app.querySelector("#pf-port")?.value?.trim() || "";
+    if (!name || !dataRoot) { toast(t("pf.formRequired"), "err"); return; }
+    const port = portRaw ? Number(portRaw) : null;
+    if (portRaw && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      toast(t("pf.formPortBad"), "err");
+      return;
+    }
+    await guard(async () => {
+      await invoke("profile_create", { name, dataRoot, port, accountId: null, zcodePath: null });
+      profileFormOpen = false;
+      await reloadProfiles();
+      toast(t("pf.toastCreated", { name }));
+    });
+  },
+  async profileLaunch(id) {
+    await guard(async () => {
+      const p = await invoke("profile_launch", { id });
+      toast(t("pf.toastLaunched", { name: p?.name || id }));
+      await reloadProfiles();
+    });
+  },
+  async profileKill(id) {
+    await guard(async () => {
+      await invoke("profile_kill", { id });
+      await reloadProfiles();
+    });
+  },
+  async profileDelete(id) {
+    const p = profiles.find((x) => x.id === id);
+    openConfirmModal({
+      kind: "danger",
+      icon: "alert",
+      title: t("pf.deleteTitle", { name: p?.name || id }),
+      desc: esc(t("pf.deleteBody", { root: p?.dataRoot || "" })),
+      yesLabel: t("common.delete"),
+      onYes: async () => {
+        await guard(async () => {
+          await invoke("profile_delete", { id });
+          await reloadProfiles();
+          toast(t("pf.toastDeleted", { name: p?.name || id }));
+        });
+      },
+    });
+  },
+});
 
 window.actions = actions;
 window.onRenameKey = (e, id) => {

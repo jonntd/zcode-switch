@@ -1398,6 +1398,13 @@ fn arms_store_dirs_for(paths: &Paths) -> Vec<PathBuf> {
     if in_sandbox() {
         return vec![paths.home.join("arms-store-sandbox")];
     }
+    // Profile 上下文：实例以 ZCODE_DESKTOP_USER_DATA_DIR=<data_root>/user-data 启动，
+    // rum-electron-store（_arms_uid）随该 userData 隔离——只读写 Profile 自己的目录，
+    // 避免多实例互写全局 appData 下的 ZCode 目录。
+    let profile_user_data = paths.data_root.join("user-data");
+    if profile_user_data.is_dir() {
+        return vec![profile_user_data.join("rum-electron-store")];
+    }
     #[cfg(windows)]
     let (appdata, mac_base, unix_base) =
         (std::env::var("APPDATA").ok().map(PathBuf::from), None, None);

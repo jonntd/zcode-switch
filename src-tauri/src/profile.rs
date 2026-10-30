@@ -106,6 +106,13 @@ fn norm_path(p: &Path) -> String {
     s.trim_end_matches('/').to_string()
 }
 
+/// 同一账号禁止绑到多个 Profile：refresh token 轮换会让双实例互相踢下线（服务端单活跃会话）。
+fn account_bound_elsewhere(profiles: &[Profile], self_id: Option<&str>, account_id: &str) -> bool {
+    profiles.iter().any(|p| {
+        Some(p.id.as_str()) != self_id && p.account_id.as_deref() == Some(account_id)
+    })
+}
+
 pub fn create_profile(
     paths: &Paths,
     name: &str,
@@ -125,6 +132,11 @@ pub fn create_profile(
     let mut profiles = list_profiles(paths);
     if data_root_conflict(&profiles, None, &root) {
         return Err(tr("err.profile.data_root_taken"));
+    }
+    if let Some(acc) = account_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        if account_bound_elsewhere(&profiles, None, acc) {
+            return Err(trf("err.profile.account_bound", &[("id", acc)]));
+        }
     }
     // 数据根不得与默认实例（不走 Profile 的主实例）重叠
     if norm_path(&root) == norm_path(&paths.data_root) {
@@ -184,6 +196,11 @@ pub fn update_profile(
         p.port = port;
     }
     if let Some(acc) = account_id {
+        if let Some(a) = acc.as_deref().filter(|s| !s.trim().is_empty()) {
+            if account_bound_elsewhere(&profiles, Some(id), a) {
+                return Err(trf("err.profile.account_bound", &[("id", a)]));
+            }
+        }
         p.account_id = acc.filter(|s| !s.trim().is_empty());
     }
     if let Some(zp) = zcode_path {
@@ -308,6 +325,11 @@ pub fn launch_profile(paths: &Paths, p: &Profile) -> Result<u32, String> {
     let mut cmd = detached(no_window(&bin));
     // ZCode 的数据根重定向入口；若客户端 home 的 setting.json 含 dataBaseDir，优先级以客户端实现为准
     cmd.env("ZCODE_DATA_BASE_DIR", &root);
+    // Electron userData 隔离：SingletonLock、rum-electron-store(_arms_uid)、会话数据随实例独立
+    // （app.asar 证实：userData = ZCODE_DESKTOP_USER_DATA_DIR ?? appData/<应用名>）
+    let user_data = root.join("user-data");
+    cmd.env("ZCODE_DESKTOP_USER_DATA_DIR", &user_data);
+    cmd.env("ZCODE_DESKTOP_SESSION_DATA_DIR", user_data.join("session"));
     if let Some(port) = p.port {
         cmd.env("ZCODE_PORT", port.to_string());
     }
