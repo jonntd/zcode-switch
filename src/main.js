@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { esc, toast, openPwModal, openConfirmModal, openProviderModal, openActivityModal, activityToast, installDelegation, dismissSplash } from "./ui.js";
+import { esc, toast, openPwModal, openConfirmModal, openProviderModal, openBrowserLoginGuide, openActivityModal, activityToast, installDelegation, dismissSplash } from "./ui.js";
 import { ic } from "./icons.js";
 import { init, t, has, lang, localeTag, stripErr } from "./i18n.js";
 
@@ -548,10 +548,17 @@ const actions = {
     let providers;
     try { providers = await invoke("oauth_providers"); }
     catch (e) { toast(stripErr(e), "err"); return; }
+    // z.ai 追加「在我的浏览器登录」变体：链接复制到剪贴板，去自己的浏览器完成登录，结果靠后台轮询收回
+    providers = [...providers, { id: "zai-browser", display: "" }];
     openProviderModal({
       providers,
       onPick: async (id) => {
         try {
+          if (id === "zai-browser") {
+            const r = await invoke("oauth_begin_browser", { provider: "zai" });
+            openBrowserLoginGuide({ url: r.authorize_url });
+            return;
+          }
           await invoke("oauth_begin", { provider: id });
           toast(t("m.loginWindowOpened"), "ok", t("m.loginWindowDetail"));
         } catch (e) {

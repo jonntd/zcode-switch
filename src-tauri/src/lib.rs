@@ -785,6 +785,8 @@ struct PollCfg {
     token: String,
     expires_at_ms: u128,
     interval_ms: u64,
+    /// 本地超时上限（与服务端 expires_at 取较小者）：窗口模式 5 分钟，浏览器模式 10 分钟。
+    local_timeout_ms: u128,
 }
 
 static PENDING_OAUTH: Mutex<Option<PendingOAuth>> = Mutex::new(None);
@@ -801,10 +803,18 @@ async fn oauth_providers() -> Result<Vec<oauth::OAuthProvider>, String> {
     Ok(oauth::OAUTH_PROVIDERS.to_vec())
 }
 
-#[tauri::command]
-async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Value, String> {
+/// 浏览器模式本地超时：要切应用、找账号、在浏览器里完成登录，比内嵌窗宽一倍。
+pub const BROWSER_FLOW_LOCAL_TIMEOUT_MS: u128 = 600_000;
+
+/// 发起 OAuth flow 的公共前段：provider 校验、代理解析、清旧 pending、init_flow、日志。
+/// 返回 (init, flow, mid, proxy_url)；窗口模式与浏览器模式共用。
+async fn prepare_flow(
+    app: &AppHandle,
+    provider: &str,
+    log_mode: &str,
+) -> Result<(oauth::FlowInit, String, String, Option<tauri::Url>), String> {
     if !oauth::OAUTH_PROVIDERS.iter().any(|p| p.id == provider) {
-        return Err(i18n::trf("err.oauth.unknown_provider", &[("provider", &provider)]));
+        return Err(i18n::trf("err.oauth.unknown_provider", &[("provider", provider)]));
     }
     let proxy_url: Option<tauri::Url> = match load_settings(&Paths::detect()).auth_proxy() {
         Some(p) => {
@@ -818,9 +828,9 @@ async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Val
         let _ = w.close();
     }
     let flow = uuid::Uuid::new_v4().to_string();
-    flowlog::log(&flow, "begin", &format!("provider={provider} proxy={}", if proxy_url.is_some() { "on" } else { "off" }));
+    flowlog::log(&flow, "begin", &format!("provider={provider} mode={log_mode} proxy={}", if proxy_url.is_some() { "on" } else { "off" }));
     let mid = uuid::Uuid::new_v4().to_string();
-    let (p_init, m_init) = (provider.clone(), mid.clone());
+    let (p_init, m_init) = (provider.to_string(), mid.clone());
     let init = match tauri::async_runtime::spawn_blocking(move || oauth::init_flow(&p_init, &m_init))
         .await
     {
@@ -843,13 +853,19 @@ async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Val
         let srv_flow = init.poll_url.rsplit('/').next().unwrap_or("");
         let expires_in = init.expires_at_ms.saturating_sub(now) / 1000;
         let authorize = init.authorize_url.split('?').next().unwrap_or("");
-        let mode = if provider == "zai" { "official-login+relay" } else { "direct" };
         flowlog::log(
             &flow,
             "init-ok",
-            &format!("mode={mode} authorize={authorize} server_flow={srv_flow} expires_in={expires_in}s interval={}ms", init.poll_interval_ms),
+            &format!("mode={log_mode} authorize={authorize} server_flow={srv_flow} expires_in={expires_in}s interval={}ms", init.poll_interval_ms),
         );
     }
+    Ok((init, flow, mid, proxy_url))
+}
+
+#[tauri::command]
+async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Value, String> {
+    let log_mode = if provider == "zai" { "official-login+relay" } else { "direct" };
+    let (init, flow, mid, proxy_url) = prepare_flow(&app, &provider, log_mode).await?;
     // zai 第二段接力用规范化入口（chat.z.ai/auth?...）：直接打原始 /api/oauth/authorize
     // 会因缺少 chat.z.ai 会话被弹回登录页；走 /auth 可完成登录/SSO。
     // 非 zai 或未规范化时 authorize_url 就是服务端原始地址。
@@ -862,6 +878,7 @@ async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Val
         token: init.poll_token.clone(),
         expires_at_ms: init.expires_at_ms,
         interval_ms: init.poll_interval_ms,
+        local_timeout_ms: oauth::FLOW_TIMEOUT_MS as u128,
     };
     *pending_oauth_guard() = Some(PendingOAuth {
         provider: provider.clone(),
@@ -1058,6 +1075,27 @@ async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Val
     }
     spawn_poll_loop(app.clone(), provider.clone(), flow.clone(), mid, poll_cfg);
     Ok(json!({ "opened": true, "provider": provider }))
+}
+
+/// 浏览器登录模式：不开内嵌窗，把授权链接交给用户在自己的浏览器完成登录，
+/// 结果靠 poll 轮询通道收尾（服务端授权完成即 ready，zcode:// 回调打不开不影响）。
+#[tauri::command]
+async fn oauth_begin_browser(app: AppHandle, provider: String) -> Result<serde_json::Value, String> {
+    let (init, flow, mid, _) = prepare_flow(&app, &provider, "browser").await?;
+    let poll_cfg = PollCfg {
+        url: init.poll_url.clone(),
+        token: init.poll_token.clone(),
+        expires_at_ms: init.expires_at_ms,
+        interval_ms: init.poll_interval_ms,
+        local_timeout_ms: BROWSER_FLOW_LOCAL_TIMEOUT_MS,
+    };
+    *pending_oauth_guard() = Some(PendingOAuth {
+        provider: provider.clone(),
+        state: init.state.clone(),
+        flow: flow.clone(),
+    });
+    spawn_poll_loop(app, provider.clone(), flow, mid, poll_cfg);
+    Ok(json!({ "opened": true, "mode": "browser", "provider": provider, "authorize_url": init.authorize_url }))
 }
 
 /// 接力后留痕：几秒后把窗口实际落点写进日志，便于判断授权是否成功
@@ -1322,7 +1360,7 @@ fn spawn_poll_loop(app: AppHandle, provider: String, flow: String, mid: String, 
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
-            std::cmp::min(cfg.expires_at_ms, now + u128::from(oauth::FLOW_TIMEOUT_MS))
+            std::cmp::min(cfg.expires_at_ms, now + cfg.local_timeout_ms)
         };
         loop {
             if !ours() {
@@ -1844,6 +1882,7 @@ pub fn run() {
             log_client_error,
             oauth_providers,
             oauth_begin,
+            oauth_begin_browser,
             set_auth_proxy,
             kill_zcode,
             set_behavior,

@@ -1036,6 +1036,21 @@ input:focus-visible,
 .pv-item:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .pv-item .pv-arrow { color: var(--ink-mute); font-family: var(--mono); }
 .pv-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.pv-url {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink-mute);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.pv-url:focus { outline: none; border-color: var(--amber-deep); }
+.pv-hint { margin-top: 12px; font-size: 11.5px; color: var(--ink-mute); line-height: 1.7; }
 
 .claim-strip.claimed {
   border-color: rgba(94, 178, 122, .42);

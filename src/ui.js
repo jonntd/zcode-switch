@@ -309,3 +309,44 @@ export function openProviderModal(m) {
   const first = mask.querySelector(".pv-item");
   if (first) first.focus();
 }
+
+// 浏览器登录指引弹框：展示授权链接 + 复制按钮，提示去自己的浏览器完成登录
+export function openBrowserLoginGuide(m) {
+  document.querySelector(".pv-mask")?.remove();
+  const mask = document.createElement("div");
+  mask.className = "pv-mask";
+  mask.innerHTML = `
+    <div class="pv-panel">
+      <div class="pv-title">${t("m.browserGuideTitle")}</div>
+      <div class="pv-sub" data-status>${t("m.browserGuideCopied")}</div>
+      <input class="pv-url" readonly spellcheck="false" value="${esc(m.url || "")}">
+      <div class="pv-actions">
+        <button class="btn-ghost pv-copy">${t("m.browserGuideCopyBtn")}</button>
+        <button class="btn-primary pv-close">${t("common.close")}</button>
+      </div>
+      <div class="pv-hint">${t("m.browserGuideHint")}</div>
+    </div>`;
+  document.body.appendChild(mask);
+  const status = mask.querySelector("[data-status]");
+  const urlInput = mask.querySelector(".pv-url");
+  const close = () => { mask.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  const markCopied = () => { status.textContent = t("m.browserGuideCopied"); };
+  const markManual = () => { status.textContent = t("m.browserGuideManual"); };
+  // 按钮点击是新鲜手势，navigator.clipboard 可用；失败回退 execCommand，再失败让用户手选复制
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(urlInput.value);
+      markCopied();
+      return;
+    } catch (e) { /* fallthrough */ }
+    urlInput.focus();
+    urlInput.select();
+    try { document.execCommand("copy") ? markCopied() : markManual(); }
+    catch (e) { markManual(); }
+  };
+  mask.querySelector(".pv-copy").addEventListener("click", copy);
+  mask.querySelector(".pv-close").addEventListener("click", close);
+  document.addEventListener("keydown", onKey);
+  copy();
+}
